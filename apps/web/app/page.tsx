@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { redeemCode } from "@/lib/backend";
+import { isBackendUnavailableMessage, redeemCode } from "@/lib/backend";
+import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
 
 export default function Home() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const backendError = isBackendUnavailableMessage(error) ? error : "";
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -44,6 +46,7 @@ export default function Home() {
         </form>
 
       </section>
+      {backendError ? <BackendUnavailableModal message={backendError} /> : null}
     </main>
   );
 }

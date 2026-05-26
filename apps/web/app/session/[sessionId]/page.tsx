@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useSoftcast } from "@/lib/use-softcast";
+import { isBackendUnavailableMessage } from "@/lib/backend";
+import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
 
 export default function SessionPage() {
   const params = useParams<{ sessionId: string }>();
   const sessionId = params.sessionId;
   const { subSessionIds, status } = useSoftcast({ sessionId });
+  const backendError = isBackendUnavailableMessage(status) ? status : "";
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-black p-5 text-[#f5f5f7]">
@@ -22,6 +25,7 @@ export default function SessionPage() {
         </div>
         {!subSessionIds.length ? <p className="mt-6 text-center text-[14px] text-white/42">No screens have been created yet.</p> : null}
       </section>
+      {backendError ? <BackendUnavailableModal message={backendError} /> : null}
     </main>
   );
 }

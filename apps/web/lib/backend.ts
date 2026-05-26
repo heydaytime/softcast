@@ -1,6 +1,8 @@
 import type { LightingState, RedeemedCode, SessionTarget } from "@softcast/protocol";
 
 const production = process.env.NODE_ENV === "production";
+export const backendUnavailableMessage = "Softcast backend is unavailable. Check that api.softcast.studio is online and try again.";
+export const websocketUnavailableMessage = "Softcast backend connection is unavailable. Check that api.softcast.studio is online and try again.";
 
 export const backendConfigError = production && !process.env.NEXT_PUBLIC_BACKEND_URL
   ? "NEXT_PUBLIC_BACKEND_URL is not configured. Set it to https://api.softcast.studio in Vercel."
@@ -15,12 +17,22 @@ export const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (production ? "" : "ws://
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (backendConfigError) throw new Error(backendConfigError);
-  const response = await fetch(`${backendUrl}${path}`, {
-    ...init,
-    headers: { "content-type": "application/json", ...(init?.headers || {}) }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${backendUrl}${path}`, {
+      ...init,
+      headers: { "content-type": "application/json", ...(init?.headers || {}) }
+    });
+  } catch {
+    throw new Error(backendUnavailableMessage);
+  }
+  if (response.status >= 500) throw new Error(backendUnavailableMessage);
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.error || response.statusText);
   return response.json() as Promise<T>;
+}
+
+export function isBackendUnavailableMessage(message: string) {
+  return message === backendUnavailableMessage || message === websocketUnavailableMessage || message.includes("NEXT_PUBLIC_BACKEND_URL") || message.includes("NEXT_PUBLIC_WS_URL");
 }
 
 export function createSession(name: string) {
