@@ -1,0 +1,27 @@
+{
+  "name": "softcast",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter @softcast/backend --filter @softcast/web --parallel dev",
+    "dev:all": "bun run --filter @softcast/backend --filter @softcast/web --parallel dev",
+    "dev:web": "bun run --filter @softcast/web dev",
+    "dev:backend": "bun run --filter @softcast/backend dev",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test:backend": "bun run --filter @softcast/backend test:smoke"
+  },
+  "dependencies": {
+    "next": "^16.0.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
