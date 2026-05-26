@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultLightingState, type LightingState, type ServerMessage, type SessionTarget } from "@softcast/protocol";
-import { wsUrl } from "@/lib/backend";
+import { wsConfigError, wsUrl } from "@/lib/backend";
 
 export function useSoftcast(target: SessionTarget | null) {
   const [state, setState] = useState<LightingState>(defaultLightingState);
@@ -15,6 +15,11 @@ export function useSoftcast(target: SessionTarget | null) {
   useEffect(() => {
     if (!target) {
       setStatus("idle");
+      return;
+    }
+
+    if (wsConfigError) {
+      setStatus(wsConfigError);
       return;
     }
 
@@ -55,6 +60,7 @@ export function useSoftcast(target: SessionTarget | null) {
   }, [target?.sessionId, target?.subSessionId]);
 
   const sendState = useCallback((nextState: LightingState) => {
+    if (wsConfigError) return false;
     if (!target || wsRef.current?.readyState !== WebSocket.OPEN) return false;
     wsRef.current.send(JSON.stringify({ type: "admin:update", target, state: nextState }));
     return true;

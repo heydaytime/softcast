@@ -1,9 +1,20 @@
 import type { LightingState, RedeemedCode, SessionTarget } from "@softcast/protocol";
 
-export const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000";
-export const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:4000/ws";
+const production = process.env.NODE_ENV === "production";
+
+export const backendConfigError = production && !process.env.NEXT_PUBLIC_BACKEND_URL
+  ? "NEXT_PUBLIC_BACKEND_URL is not configured. Set it to https://api.softcast.studio in Vercel."
+  : "";
+
+export const wsConfigError = production && !process.env.NEXT_PUBLIC_WS_URL
+  ? "NEXT_PUBLIC_WS_URL is not configured. Set it to wss://api.softcast.studio/ws in Vercel."
+  : "";
+
+export const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || (production ? "" : "http://localhost:4000");
+export const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (production ? "" : "ws://localhost:4000/ws");
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  if (backendConfigError) throw new Error(backendConfigError);
   const response = await fetch(`${backendUrl}${path}`, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers || {}) }
