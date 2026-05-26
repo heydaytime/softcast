@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { defaultLightingState, lightingModes, palettes, presetLibrary, stateFromPreset, type LightingState, type LightingPreset, type RgbDirection } from "@softcast/protocol";
-import { createCode, createSession, createSubSession, deleteSession, deleteSubSession, updateState } from "@/lib/backend";
+import { createCode, createSession, createSubSession, deleteSession, deleteSubSession, isBackendUnavailableMessage, updateState } from "@/lib/backend";
 import { useSoftcast } from "@/lib/use-softcast";
 import { ScreenRenderer } from "@/lib/ScreenRenderer";
+import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
 
 type LocalScreen = { name: string; subSessionId: string; screenUrl: string };
 type LocalSession = { name: string; sessionId: string; sessionUrl: string; screens: LocalScreen[] };
@@ -34,6 +35,7 @@ export default function AdminPage() {
   const sessionSync = useSoftcast(active ? { sessionId: active.sessionId } : null);
   const screenSync = useSoftcast(active && codeTargetScreen ? { sessionId: active.sessionId, subSessionId: codeTargetScreen.subSessionId } : null);
   const syncStatus = codeTargetScreen ? screenSync.status : sessionSync.status;
+  const backendModalMessage = isBackendUnavailableMessage(error) ? error : isBackendUnavailableMessage(syncStatus) ? syncStatus : "";
 
   useEffect(() => {
     setState(screenSync.state);
@@ -300,6 +302,7 @@ export default function AdminPage() {
         </aside>
       </div>
       {showClientConfirm ? <ClientConfirmModal onCancel={() => setShowClientConfirm(false)} /> : null}
+      {backendModalMessage ? <BackendUnavailableModal message={backendModalMessage} /> : null}
     </main>
   );
 }

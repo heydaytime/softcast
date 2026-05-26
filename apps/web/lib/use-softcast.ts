@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { defaultLightingState, type LightingState, type ServerMessage, type SessionTarget } from "@softcast/protocol";
-import { wsConfigError, wsUrl } from "@/lib/backend";
+import { websocketUnavailableMessage, wsConfigError, wsUrl } from "@/lib/backend";
 
 export function useSoftcast(target: SessionTarget | null) {
   const [state, setState] = useState<LightingState>(defaultLightingState);
@@ -34,11 +34,11 @@ export function useSoftcast(target: SessionTarget | null) {
     });
     ws.addEventListener("close", () => {
       if (wsRef.current !== ws) return;
-      setStatus("disconnected");
+      setStatus(websocketUnavailableMessage);
     });
     ws.addEventListener("error", () => {
       if (wsRef.current !== ws) return;
-      setStatus("error");
+      setStatus(websocketUnavailableMessage);
     });
     ws.addEventListener("message", (event) => {
       if (wsRef.current !== ws) return;

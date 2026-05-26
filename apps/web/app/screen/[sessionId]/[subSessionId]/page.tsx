@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSoftcast } from "@/lib/use-softcast";
 import { ScreenRenderer } from "@/lib/ScreenRenderer";
+import { isBackendUnavailableMessage } from "@/lib/backend";
+import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
 
 export default function ScreenPage() {
   const params = useParams<{ sessionId: string; subSessionId: string }>();
@@ -13,6 +15,7 @@ export default function ScreenPage() {
   const [overlay, setOverlay] = useState(true);
   const [immersive, setImmersive] = useState(false);
   const { state, status } = useSoftcast({ sessionId, subSessionId });
+  const backendError = isBackendUnavailableMessage(status) ? status : "";
 
   useEffect(() => {
     async function enterFullscreen() {
@@ -86,6 +89,7 @@ export default function ScreenPage() {
           <p className="mt-3 text-[11px] text-white/28">Press F for fullscreen. Press Enter or Space to hide controls. Escape exits fullscreen.</p>
         </section>
       ) : null}
+      {backendError ? <BackendUnavailableModal message={backendError} /> : null}
     </main>
   );
 }
