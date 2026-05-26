@@ -1,0 +1,6 @@
+{
+  "framework": "nextjs",
+  "installCommand": "bun install",
+  "buildCommand": "bun run --filter @softcast/web build",
+  "outputDirectory": "apps/web/.next"
+}
