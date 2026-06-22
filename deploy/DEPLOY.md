@@ -4,15 +4,33 @@ Production topology:
 
 ```
 softcast.studio        -> frontend (Vercel, auto-deploys on push to main)
-api.softcast.studio    -> backend  (Raspberry Pi: Caddy :80 -> Bun :4000)
+api.softcast.studio    -> Cloudflare (orange-cloud, Full -> origin over HTTPS)
+                          -> hdtrs   (GCP edge, WireGuard client, Caddy :443, public 34.29.172.203)
+                            -> [WireGuard] -> Pi 192.168.100.150
+                                              -> Caddy :80 -> Bun backend 127.0.0.1:4000 -> Redis
 clerk.softcast.studio  -> Clerk Frontend API (production instance only; DNS-only, later)
 ```
 
-Public TLS + ingress for `api.softcast.studio` is handled by Cloudflare, which
-forwards into the Pi over WireGuard on plain HTTP. The Pi runs Caddy (HTTP) in
-front of the Bun backend, Redis for storage, and a systemd unit that auto-starts
-the backend on boot. Backend deploys are manual (rsync over ssh) — there is no
-CI/CD for the backend.
+Cloudflare terminates public TLS for `api.softcast.studio` and connects to the
+origin `hdtrs` (a GCP box that also fronts `api.blendr.live` / `ai.heydaytime.net`).
+`hdtrs` Caddy auto-provisions a Let's Encrypt cert for `api.softcast.studio` and
+reverse-proxies over WireGuard to the Pi's Caddy, which fronts the Bun backend.
+The Pi runs Redis (AOF) and a systemd unit that auto-starts the backend on boot.
+Backend code deploys are manual (rsync over ssh) — no CI/CD for the backend.
+
+### hdtrs edge (one-time)
+
+`hdtrs` already runs Caddy (`/etc/caddy/Caddyfile`) for other sites. Append the
+softcast block (see `deploy/hdtrs-softcast.caddy`) — do NOT replace the file:
+
+```bash
+sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak.$(date +%s)
+# append the api.softcast.studio { reverse_proxy 192.168.100.150:80 } block
+sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+The Pi must already be serving on `:80` (its own Caddy) and reachable from `hdtrs`
+over WireGuard at `192.168.100.150`.
 
 ## Clerk (development instance, for now)
 
