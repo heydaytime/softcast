@@ -1,16 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { defaultLightingState, type LightingState, type ServerMessage, type SessionTarget } from "@softcast/protocol";
+import { useEffect, useState } from "react";
+import { defaultLightingState, type LightingState, type ScreenSummary, type ServerMessage, type SessionTarget } from "@softcast/protocol";
 import { websocketUnavailableMessage, wsConfigError, wsUrl } from "@/lib/backend";
+
+const baseReconnectDelay = 1000;
+const maxReconnectDelay = 15000;
+// Stay quiet (status "reconnecting") for brief blips; only escalate to the
+// backend-unavailable message — which surfaces the modal — once an outage persists.
+const attemptsBeforeUnavailable = 5;
 
 export function useSoftcast(target: SessionTarget | null) {
   const [state, setState] = useState<LightingState>(defaultLightingState);
-  const [subSessionIds, setSubSessionIds] = useState<string[]>([]);
+  const [screens, setScreens] = useState<ScreenSummary[]>([]);
   const [status, setStatus] = useState("connecting");
-  const wsRef = useRef<WebSocket | null>(null);
-  const latestSeqRef = useRef(0);
-  const latestRevisionRef = useRef(-1);
 
   useEffect(() => {
     if (!target) {
@@ -23,48 +26,99 @@ export function useSoftcast(target: SessionTarget | null) {
       return;
     }
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    latestSeqRef.current = 0;
-    latestRevisionRef.current = -1;
-    ws.addEventListener("open", () => {
-      if (wsRef.current !== ws) return;
-      setStatus("connected");
-      ws.send(JSON.stringify({ type: "subscribe", target }));
-    });
-    ws.addEventListener("close", () => {
-      if (wsRef.current !== ws) return;
-      setStatus(websocketUnavailableMessage);
-    });
-    ws.addEventListener("error", () => {
-      if (wsRef.current !== ws) return;
-      setStatus(websocketUnavailableMessage);
-    });
-    ws.addEventListener("message", (event) => {
-      if (wsRef.current !== ws) return;
-      const message = JSON.parse(event.data) as ServerMessage;
-      if (message.seq <= latestSeqRef.current) return;
-      latestSeqRef.current = message.seq;
-      if (message.type === "state") {
-        if (message.revision <= latestRevisionRef.current) return;
-        latestRevisionRef.current = message.revision;
-        setState(message.state);
-      }
-      if (message.type === "subsessions") setSubSessionIds(message.subSessionIds);
-      if (message.type === "error") setStatus(message.message);
-    });
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    let latestSeq = 0;
+    let latestRevision = -1;
+    // `terminal` stops the reconnect loop for application-level failures (the
+    // subscribed session/screen no longer exists). `disposed` guards the effect cleanup.
+    let terminal = false;
+    let disposed = false;
+
+    function scheduleReconnect() {
+      if (disposed || terminal || reconnectTimer) return;
+      attempts += 1;
+      setStatus(attempts >= attemptsBeforeUnavailable ? websocketUnavailableMessage : "reconnecting");
+      const delay = Math.min(maxReconnectDelay, baseReconnectDelay * 2 ** (attempts - 1));
+      const jitter = delay * 0.2 * Math.random();
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay + jitter);
+    }
+
+    function connect() {
+      if (disposed || terminal) return;
+      latestSeq = 0;
+      latestRevision = -1;
+      const socket = new WebSocket(wsUrl);
+      ws = socket;
+
+      socket.addEventListener("open", () => {
+        if (ws !== socket) return;
+        attempts = 0;
+        setStatus("connected");
+        socket.send(JSON.stringify({ type: "subscribe", target }));
+      });
+
+      socket.addEventListener("message", (event) => {
+        if (ws !== socket) return;
+        const message = JSON.parse(event.data) as ServerMessage;
+        if (message.seq <= latestSeq) return;
+        latestSeq = message.seq;
+        if (message.type === "state") {
+          if (message.revision <= latestRevision) return;
+          latestRevision = message.revision;
+          setState(message.state);
+        }
+        if (message.type === "screens") setScreens(message.screens);
+        if (message.type === "error") {
+          // The subscribed resource is gone or invalid; reconnecting would just loop
+          // against something that no longer exists. Surface it and stop.
+          terminal = true;
+          setStatus(message.message);
+          socket.close();
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (ws !== socket || terminal || disposed) return;
+        scheduleReconnect();
+      });
+
+      socket.addEventListener("error", () => {
+        if (ws !== socket) return;
+        // An error is normally followed by a close event, which schedules the
+        // reconnect. Close defensively in case the socket is left hanging.
+        try { socket.close(); } catch { /* already closing */ }
+      });
+    }
+
+    // A backgrounded tab or sleeping display may have a silently-dead socket;
+    // reconnect immediately when it becomes visible or the network returns.
+    function reconnectNow() {
+      if (disposed || terminal) return;
+      const closed = !ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING;
+      if (!closed) return;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      attempts = 0;
+      connect();
+    }
+
+    function onVisible() {
+      if (document.visibilityState === "visible") reconnectNow();
+    }
+
+    connect();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", reconnectNow);
+
     return () => {
-      if (wsRef.current === ws) wsRef.current = null;
-      ws.close();
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", reconnectNow);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) ws.close();
     };
-  }, [target?.sessionId, target?.subSessionId]);
+  }, [target?.sessionId, target?.screenId]);
 
-  const sendState = useCallback((nextState: LightingState) => {
-    if (wsConfigError) return false;
-    if (!target || wsRef.current?.readyState !== WebSocket.OPEN) return false;
-    wsRef.current.send(JSON.stringify({ type: "admin:update", target, state: nextState }));
-    return true;
-  }, [target]);
-
-  return { state, subSessionIds, status, sendState };
+  return { state, screens, status };
 }
