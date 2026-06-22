@@ -13,3 +13,4 @@ bun.lock
 # agent tooling (not project code)
 .agents/
 skills-lock.json
+.vercel
