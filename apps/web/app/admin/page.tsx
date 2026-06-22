@@ -1,20 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { defaultLightingState, lightingModes, palettes, presetLibrary, stateFromPreset, type LightingState, type LightingPreset, type RgbDirection } from "@softcast/protocol";
-import { createCode, createSession, createSubSession, deleteSession, deleteSubSession, isBackendUnavailableMessage, updateState } from "@/lib/backend";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { defaultLightingState, hsvToCssColor, kelvinToCssColor, lightingCssColor, maxTemperature, minTemperature, type LightingMode, type LightingState, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
+import { createCode, createScreen, createSession, deleteScreen, deleteSession, getAdminWorkspace, isBackendUnavailableMessage, updateState } from "@/lib/backend";
+import { useAuth } from "@clerk/nextjs";
 import { useSoftcast } from "@/lib/use-softcast";
 import { ScreenRenderer } from "@/lib/ScreenRenderer";
+import { Slider } from "@/lib/Slider";
+import { ColorWheel } from "@/lib/ColorWheel";
+import { getCctRecents, getColorRecents, pushCctRecent, pushColorRecent, type ColorRecent } from "@/lib/recents";
 import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
+import { AuthControls, FieldInput, Kicker, PrimaryButton, SecondaryButton, SoftcastHeader } from "@/lib/ui";
 
-type LocalScreen = { name: string; subSessionId: string; screenUrl: string };
-type LocalSession = { name: string; sessionId: string; sessionUrl: string; screens: LocalScreen[] };
-type Target = { session: LocalSession; screen?: LocalScreen };
+// Ordered cool→warm (high→low Kelvin) so the chips read top-to-bottom in the same
+// direction as the vertical CCT gradient bar (blue/cool at top, orange/warm at bottom).
+const cctPresets = [6500, 5600, 4300, 3200, 2700];
 
 export default function AdminPage() {
-  const [sessions, setSessions] = useState<LocalSession[]>([]);
+  const { getToken, isLoaded } = useAuth();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
-  const [activeSubSessionId, setActiveSubSessionId] = useState("");
+  const [activeScreenId, setActiveScreenId] = useState("");
   const [sessionName, setSessionName] = useState("studio");
   const [screenName, setScreenName] = useState("key light");
   const [code, setCode] = useState("");
@@ -23,58 +29,101 @@ export default function AdminPage() {
   const [sessionMenuId, setSessionMenuId] = useState("");
   const [screenMenuId, setScreenMenuId] = useState("");
   const [showClientConfirm, setShowClientConfirm] = useState(false);
-  const [crampedLayout, setCrampedLayout] = useState(false);
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [cctRecents, setCctRecents] = useState<number[]>([]);
+  const [colorRecents, setColorRecents] = useState<ColorRecent[]>([]);
+
+  useEffect(() => {
+    setCctRecents(getCctRecents());
+    setColorRecents(getColorRecents());
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    let cancelled = false;
+
+    async function loadWorkspace() {
+      setError("");
+      try {
+        const workspace = await getAdminWorkspace(await getToken());
+        if (!cancelled) setSessions(workspace.sessions);
+      } catch (error) {
+        if (!cancelled) setError(error instanceof Error ? error.message : "Could not load sessions");
+      } finally {
+        if (!cancelled) setWorkspaceLoaded(true);
+      }
+    }
+
+    void loadWorkspace();
+    return () => { cancelled = true; };
+  }, [getToken, isLoaded]);
 
   useEffect(() => {
     if (!activeSessionId && sessions[0]) setActiveSessionId(sessions[0].sessionId);
   }, [activeSessionId, sessions]);
 
   const active = sessions.find((session) => session.sessionId === activeSessionId);
-  const codeTargetScreen = active?.screens.find((screen) => screen.subSessionId === activeSubSessionId);
-  const target: Target | null = active && codeTargetScreen ? { session: active, screen: codeTargetScreen } : null;
+  const screen = active?.screens.find((item) => item.screenId === activeScreenId);
   const sessionSync = useSoftcast(active ? { sessionId: active.sessionId } : null);
-  const screenSync = useSoftcast(active && codeTargetScreen ? { sessionId: active.sessionId, subSessionId: codeTargetScreen.subSessionId } : null);
-  const syncStatus = codeTargetScreen ? screenSync.status : sessionSync.status;
+  const screenSync = useSoftcast(active && screen ? { sessionId: active.sessionId, screenId: screen.screenId } : null);
+  const syncStatus = screen ? screenSync.status : sessionSync.status;
   const backendModalMessage = isBackendUnavailableMessage(error) ? error : isBackendUnavailableMessage(syncStatus) ? syncStatus : "";
+
+  useEffect(() => {
+    if (!activeSessionId || sessionSync.status !== "connected") return;
+    setSessions((current) => current.map((session) => session.sessionId === activeSessionId ? { ...session, screens: sessionSync.screens } : session));
+  }, [activeSessionId, sessionSync.screens, sessionSync.status]);
+
+  useEffect(() => {
+    if (active && activeScreenId && !active.screens.some((item) => item.screenId === activeScreenId)) {
+      setActiveScreenId("");
+      setCode("");
+    }
+  }, [active, activeScreenId]);
 
   useEffect(() => {
     setState(screenSync.state);
   }, [screenSync.state]);
 
-  useEffect(() => {
-    function updateCrampedLayout() {
-      setCrampedLayout(window.innerWidth < 1024 || window.innerHeight < 620);
-    }
+  function selectSession(session: SessionSummary) {
+    setActiveSessionId(session.sessionId);
+    setActiveScreenId("");
+    setCode("");
+    setSessionMenuId("");
+    setScreenMenuId("");
+  }
 
-    updateCrampedLayout();
-    window.addEventListener("resize", updateCrampedLayout);
-    return () => window.removeEventListener("resize", updateCrampedLayout);
-  }, []);
+  function selectScreen(item: ScreenSummary) {
+    setActiveScreenId(item.screenId);
+    setCode("");
+    setSessionMenuId("");
+    setScreenMenuId("");
+  }
 
-  async function addSession(event: React.FormEvent) {
+  async function addSession(event: FormEvent) {
     event.preventDefault();
+    if (!sessionName.trim()) return;
     setError("");
     try {
-      const created = await createSession(sessionName);
-      const next = upsertSession(sessions, { name: sessionName, ...created, screens: [] });
-      setSessions(next);
-      setActiveSessionId(created.sessionId);
-      setActiveSubSessionId("");
+      const { session } = await createSession(sessionName, await getToken());
+      setSessions(upsertSession(sessions, session));
+      setActiveSessionId(session.sessionId);
+      setActiveScreenId("");
       setCode("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not create session");
     }
   }
 
-  async function copySessionLink(session: LocalSession) {
+  async function copySessionLink(session: SessionSummary) {
     await navigator.clipboard.writeText(session.sessionUrl);
     setSessionMenuId("");
   }
 
-  async function removeSession(session: LocalSession) {
+  async function removeSession(session: SessionSummary) {
     setError("");
     try {
-      await deleteSession(session.sessionId);
+      await deleteSession(session.sessionId, await getToken());
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not delete session");
       return;
@@ -86,20 +135,18 @@ export default function AdminPage() {
     setCode("");
     if (activeSessionId === session.sessionId) {
       setActiveSessionId(next[0]?.sessionId || "");
-      setActiveSubSessionId("");
+      setActiveScreenId("");
     }
   }
 
-  async function addScreen(event: React.FormEvent) {
+  async function addScreen(event: FormEvent) {
     event.preventDefault();
-    if (!active) return;
+    if (!active || !screenName.trim()) return;
     setError("");
     try {
-      const created = await createSubSession(active.sessionId, screenName);
-      const screen = { name: screenName, ...created };
-      const next = sessions.map((session) => session.sessionId === active.sessionId ? { ...session, screens: upsertScreen(session.screens, screen) } : session);
-      setSessions(next);
-      setActiveSubSessionId(created.subSessionId);
+      const { screen: created } = await createScreen(active.sessionId, screenName, await getToken());
+      setSessions(sessions.map((session) => session.sessionId === active.sessionId ? { ...session, screens: upsertScreen(session.screens, created) } : session));
+      setActiveScreenId(created.screenId);
       setCode("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not create screen");
@@ -111,29 +158,15 @@ export default function AdminPage() {
     setCode("");
     setError("");
     try {
-      const generated = await createCode({ sessionId: active.sessionId, subSessionId: codeTargetScreen?.subSessionId });
+      const generated = await createCode({ sessionId: active.sessionId, screenId: screen?.screenId }, await getToken());
       setCode(generated.code);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not generate code");
     }
   }
 
-  async function generateScreenCode(screen: LocalScreen) {
-    if (!active) return;
-    setActiveSubSessionId(screen.subSessionId);
-    setCode("");
-    setError("");
-    try {
-      const generated = await createCode({ sessionId: active.sessionId, subSessionId: screen.subSessionId });
-      setCode(generated.code);
-      setScreenMenuId("");
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not generate code");
-    }
-  }
-
-  async function copyScreenLink(screen: LocalScreen) {
-    await navigator.clipboard.writeText(screen.screenUrl);
+  async function copyScreenLink(item: ScreenSummary) {
+    await navigator.clipboard.writeText(item.screenUrl);
     setScreenMenuId("");
   }
 
@@ -142,164 +175,234 @@ export default function AdminPage() {
     await navigator.clipboard.writeText(code);
   }
 
-  async function removeScreen(screen: LocalScreen) {
+  async function removeScreen(item: ScreenSummary) {
     if (!active) return;
     setError("");
     try {
-      await deleteSubSession(active.sessionId, screen.subSessionId);
+      await deleteScreen(active.sessionId, item.screenId, await getToken());
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not delete screen");
       return;
     }
 
-    const next = sessions.map((session) => session.sessionId === active.sessionId ? { ...session, screens: session.screens.filter((item) => item.subSessionId !== screen.subSessionId) } : session);
-    setSessions(next);
+    setSessions(sessions.map((session) => session.sessionId === active.sessionId ? { ...session, screens: session.screens.filter((s) => s.screenId !== item.screenId) } : session));
     setScreenMenuId("");
     setCode("");
-    if (activeSubSessionId === screen.subSessionId) setActiveSubSessionId("");
+    if (activeScreenId === item.screenId) setActiveScreenId("");
   }
 
   async function pushState(nextState: LightingState) {
-    if (!target?.screen) return;
-    if (screenSync.sendState(nextState)) return;
-
+    if (!active || !screen) return;
+    setState(nextState);
     try {
-      const updated = await updateState(target.session.sessionId, nextState, target.screen.subSessionId);
-      setState(updated.state);
+      await updateState(active.sessionId, screen.screenId, nextState, await getToken());
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not update light state");
     }
   }
 
+  function setMode(mode: LightingMode) {
+    pushState({ ...state, mode });
+  }
+
+  function applyCct(temperature: number) {
+    pushState({ ...state, mode: "cct", temperature });
+    setCctRecents(pushCctRecent(temperature));
+  }
+
+  function applyColor(hue: number, saturation: number) {
+    pushState({ ...state, mode: "color", hue, saturation });
+    setColorRecents(pushColorRecent(hue, saturation));
+  }
+
   return (
-    <main className={`${crampedLayout ? "min-h-dvh overflow-y-auto" : "h-dvh overflow-hidden"} bg-black text-[#f5f5f7]`}>
-      <header className="flex h-12 items-center justify-between border-b border-white/[0.08] bg-black px-4">
-        <button type="button" onClick={() => setShowClientConfirm(true)} className="flex items-center gap-3 rounded-full pr-3 transition hover:bg-white/[0.06]">
-          <div className="h-3 w-3 rounded-full bg-white" />
-          <h1 className="text-[14px] font-semibold tracking-[-0.02em]">Softcast</h1>
-          <span className="hidden text-[12px] text-white/32 sm:inline">Admin</span>
-        </button>
-        <div className="flex items-center gap-3 text-[12px] text-white/45">
-          <span className={statusPillClass(syncStatus)}>{syncStatus}</span>
-        </div>
-      </header>
+    <main className="flex h-[100dvh] flex-col overflow-hidden bg-sc-bg text-sc-text">
+      <SoftcastHeader action={<AuthControls />} onBrandClick={() => setShowClientConfirm(true)} />
+      <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] border-t border-black">
+        <aside className="flex min-h-0 flex-col border-r border-sc-border bg-sc-rail">
+          <RailSection
+            title="Sessions"
+            form={<RailCreate value={sessionName} onChange={setSessionName} onSubmit={addSession} placeholder="Session name" label="Add session" />}
+          >
+            {sessions.map((session) => (
+              <RailRow
+                key={session.sessionId}
+                name={session.name}
+                meta={`${session.screens.length}`}
+                selected={session.sessionId === activeSessionId && !activeScreenId}
+                menuOpen={sessionMenuId === session.sessionId}
+                onSelect={() => selectSession(session)}
+                onToggleMenu={() => { setScreenMenuId(""); setSessionMenuId(sessionMenuId === session.sessionId ? "" : session.sessionId); }}
+                menu={(
+                  <>
+                    <MenuItem onClick={() => copySessionLink(session)}>Copy link</MenuItem>
+                    <MenuItem danger onClick={() => removeSession(session)}>Delete session</MenuItem>
+                  </>
+                )}
+              />
+            ))}
+            {!workspaceLoaded ? <EmptyText>Loading your sessions…</EmptyText> : null}
+            {workspaceLoaded && !sessions.length ? <EmptyText>Create a session to begin.</EmptyText> : null}
+          </RailSection>
 
-      {crampedLayout ? <CrampedLayoutWarning /> : null}
+          <div className="h-px shrink-0 bg-sc-border" />
 
-      <div className={crampedLayout ? "grid min-h-[calc(100dvh-48px)] grid-cols-1 overflow-visible" : "grid h-[calc(100dvh-48px)] grid-cols-[280px_minmax(0,1fr)_360px] overflow-hidden"}>
-        <aside className={`${crampedLayout ? "border-b" : "border-r overflow-hidden"} border-white/[0.08] bg-[#050505] p-3`}>
-          <form onSubmit={addSession} className="mb-4 rounded-[18px] border border-white/[0.08] bg-[#0a0a0b] p-3">
-            <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.12em] text-white/34">Session</label>
-            <input value={sessionName} onChange={(event) => setSessionName(event.target.value)} className="h-9 w-full rounded-[10px] border border-white/[0.08] bg-black px-3 text-[13px] text-white outline-none focus:border-white/25" />
-            <button className="mt-2 h-9 w-full rounded-full bg-white text-[13px] font-semibold text-black transition hover:bg-white/85">Create</button>
-          </form>
-
-          <div className="mb-4">
-            <p className="mb-2 px-1 text-[11px] font-medium uppercase tracking-[0.12em] text-white/34">Sessions</p>
-            <div className="space-y-1">
-              {sessions.map((session) => (
-                <div key={session.sessionId} className="relative">
-                <button onClick={() => { setActiveSessionId(session.sessionId); setActiveSubSessionId(""); setCode(""); setSessionMenuId(""); setScreenMenuId(""); }} className={`flex h-10 w-full items-center justify-between rounded-[10px] py-0 pl-3 pr-10 text-left text-[13px] transition ${session.sessionId === activeSessionId && !activeSubSessionId ? "bg-white text-black" : "text-white/55 hover:bg-white/[0.06] hover:text-white"}`}>
-                    <span className="truncate font-medium">{session.name}</span>
-                    <span className="text-[11px] text-white/28">{session.screens.length}</span>
-                  </button>
-                <button type="button" aria-label={`Open ${session.name} menu`} onClick={(event) => { event.stopPropagation(); setScreenMenuId(""); setSessionMenuId(sessionMenuId === session.sessionId ? "" : session.sessionId); }} className={`absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-[8px] text-[18px] leading-none ${session.sessionId === activeSessionId && !activeSubSessionId ? "text-black/45 hover:bg-black/[0.08]" : "text-white/35 hover:bg-white/[0.08] hover:text-white"}`}>...</button>
-                  {sessionMenuId === session.sessionId ? (
-                    <div className="absolute right-1 top-10 z-20 w-40 overflow-hidden rounded-[12px] border border-white/[0.1] bg-[#151517] shadow-2xl">
-                      <button type="button" onClick={() => copySessionLink(session)} className="block h-9 w-full px-3 text-left text-[13px] text-white/76 hover:bg-white/[0.08]">Copy link</button>
-                      <button type="button" onClick={() => removeSession(session)} className="block h-9 w-full px-3 text-left text-[13px] text-[#ff6961] hover:bg-white/[0.08]">Delete session</button>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {active ? (
-            <>
-              <form onSubmit={addScreen} className="mb-4 rounded-[18px] border border-white/[0.08] bg-[#0a0a0b] p-3">
-                <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.12em] text-white/34">New screen</label>
-                <input value={screenName} onChange={(event) => setScreenName(event.target.value)} className="h-9 w-full rounded-[10px] border border-white/[0.08] bg-black px-3 text-[13px] text-white outline-none focus:border-white/25" />
-                <button className="mt-2 h-9 w-full rounded-full border border-white/[0.12] text-[13px] font-medium text-white/82 transition hover:bg-white/[0.08]">Create</button>
-              </form>
-
-              <div>
-                <p className="mb-2 px-1 text-[11px] font-medium uppercase tracking-[0.12em] text-white/34">Screens</p>
-                <div className="space-y-1">
-                  {active.screens.map((screen) => (
-                    <div key={screen.subSessionId} className="relative">
-                      <button onClick={() => { setActiveSubSessionId(screen.subSessionId); setCode(""); setSessionMenuId(""); setScreenMenuId(""); }} className={`w-full rounded-[12px] py-2 pl-3 pr-10 text-left transition ${screen.subSessionId === activeSubSessionId ? "bg-white text-black" : "text-white/58 hover:bg-white/[0.06] hover:text-white"}`}>
-                        <span className="block truncate text-[13px] font-semibold">{screen.name}</span>
-                        <span className={`block truncate text-[11px] ${screen.subSessionId === activeSubSessionId ? "text-black/55" : "text-white/28"}`}>Direct light screen</span>
-                      </button>
-                      <button type="button" aria-label={`Open ${screen.name} menu`} onClick={(event) => { event.stopPropagation(); setSessionMenuId(""); setScreenMenuId(screenMenuId === screen.subSessionId ? "" : screen.subSessionId); }} className={`absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-[8px] text-[18px] leading-none ${screen.subSessionId === activeSubSessionId ? "text-black/45 hover:bg-black/[0.08]" : "text-white/35 hover:bg-white/[0.08] hover:text-white"}`}>...</button>
-                      {screenMenuId === screen.subSessionId ? (
-                        <div className="absolute right-1 top-10 z-20 w-44 overflow-hidden rounded-[12px] border border-white/[0.1] bg-[#151517] shadow-2xl">
-                          <button type="button" onClick={() => copyScreenLink(screen)} className="block h-9 w-full px-3 text-left text-[13px] text-white/76 hover:bg-white/[0.08]">Copy link</button>
-                          <button type="button" onClick={() => generateScreenCode(screen)} className="block h-9 w-full px-3 text-left text-[13px] text-white/76 hover:bg-white/[0.08]">Generate code</button>
-                          <button type="button" onClick={() => removeScreen(screen)} className="block h-9 w-full px-3 text-left text-[13px] text-[#ff6961] hover:bg-white/[0.08]">Delete screen</button>
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                  {!active.screens.length ? <p className="px-1 py-2 text-[12px] leading-5 text-white/32">Create a screen to control lighting.</p> : null}
-                </div>
-              </div>
-            </>
-          ) : null}
+          <RailSection
+            title="Screens"
+            form={<RailCreate value={screenName} onChange={setScreenName} onSubmit={addScreen} placeholder="Screen name" label="Add screen" disabled={!active} />}
+          >
+            {active?.screens.map((item) => (
+              <RailRow
+                key={item.screenId}
+                name={item.name}
+                dot
+                selected={item.screenId === activeScreenId}
+                menuOpen={screenMenuId === item.screenId}
+                onSelect={() => selectScreen(item)}
+                onToggleMenu={() => { setSessionMenuId(""); setScreenMenuId(screenMenuId === item.screenId ? "" : item.screenId); }}
+                menu={(
+                  <>
+                    <MenuItem onClick={() => copyScreenLink(item)}>Copy link</MenuItem>
+                    <MenuItem danger onClick={() => removeScreen(item)}>Delete screen</MenuItem>
+                  </>
+                )}
+              />
+            ))}
+            {!active ? <EmptyText>Select a session first.</EmptyText> : null}
+            {active && !active.screens.length ? <EmptyText>Create a screen to control lighting.</EmptyText> : null}
+          </RailSection>
         </aside>
 
-        <section className={crampedLayout ? "hidden" : "flex min-w-0 flex-col bg-black p-4"}>
-          <div className="mb-3 flex items-center justify-between">
-            <div className="min-w-0">
-              <p className="text-[12px] text-white/36">{active ? active.name : "No session"}</p>
-            <h2 className="truncate text-[24px] font-semibold tracking-[-0.04em]">{codeTargetScreen ? codeTargetScreen.name : active ? `${active.name} root` : "No session"}</h2>
-          </div>
-            <div className="rounded-full border border-white/[0.08] px-3 py-1 text-[12px] text-white/42">{codeTargetScreen ? "Screen" : "Select screen"}</div>
-          </div>
+        <section className="flex min-h-0 flex-col">
+          <ContextBar sessionName={active?.name} screenName={screen?.name} hasSession={Boolean(active)} />
+          <div className="grid min-h-0 flex-1 grid-cols-[24rem_minmax(0,1fr)] gap-4 p-4 max-xl:grid-cols-1">
+            {!active ? (
+              <>
+                <Panel><CenterNote title="No session selected" body="Create or pick a session in the left rail to begin." /></Panel>
+                <Panel><CenterNote title="Nothing to preview" body="A session groups screens. Select a screen to control a light." /></Panel>
+              </>
+            ) : screen ? (
+              <>
+                <div className="flex min-h-0 flex-col gap-4">
+                  <SharePanel
+                    title={screen.name}
+                    code={code}
+                    error={error}
+                    onGenerate={generateCode}
+                    onCopyLink={() => copyScreenLink(screen)}
+                    onCopyCode={copyCode}
+                  />
+                  <Panel className="flex min-h-0 flex-1 flex-col">
+                    <div className="flex items-center justify-between gap-3">
+                      <Kicker>Fill light</Kicker>
+                      <Segmented
+                        value={state.mode}
+                        onChange={setMode}
+                        options={[{ value: "cct", label: "White" }, { value: "color", label: "Color" }]}
+                      />
+                    </div>
 
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-[24px] border border-white/[0.08] bg-[#050505]">
-            {codeTargetScreen ? <Preview state={state} /> : (
-              <div className="flex h-full items-center justify-center p-8 text-center">
-                <div>
-                  <p className="text-[28px] font-semibold tracking-[-0.04em] text-white">Root session selected</p>
-                  <p className="mx-auto mt-2 max-w-[380px] text-[14px] leading-6 text-white/42">Use the inspector to generate a chooser code. Select a screen in the left rail to control lighting.</p>
+                    {state.mode === "cct" ? (
+                      <div className="mt-3 grid min-h-0 flex-1 grid-cols-[5rem_minmax(0,1fr)_5rem] gap-3">
+                        <FaderColumn label="CCT" value={`${Math.round(state.temperature)}K`}>
+                          <Slider
+                            orientation="vertical"
+                            value={state.temperature}
+                            min={minTemperature}
+                            max={maxTemperature}
+                            step={50}
+                            ariaLabel="Color temperature"
+                            trackStyle={{ background: "linear-gradient(to top, #ff8a3d 0%, #ffd6a0 24%, #f4f6ff 50%, #cfe5ff 74%, #8ec5ff 100%)" }}
+                            onChange={(temperature) => pushState({ ...state, temperature })}
+                            onCommit={(temperature) => setCctRecents(pushCctRecent(temperature))}
+                          />
+                        </FaderColumn>
+                        <div className="flex min-h-0 flex-col items-stretch justify-center gap-2">
+                          {cctPresets.map((preset) => (
+                            <PresetChip key={preset} color={kelvinToCssColor(preset)} label={`${preset}K`} active={state.temperature === preset} onClick={() => applyCct(preset)} />
+                          ))}
+                        </div>
+                        <FaderColumn label="Brightness" value={`${Math.round(state.brightness * 100)}%`}>
+                          <Slider
+                            orientation="vertical"
+                            value={state.brightness}
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            ariaLabel="Brightness"
+                            trackStyle={{ background: "rgba(255,255,255,0.07)" }}
+                            fillStyle={{ background: lightingCssColor(state) }}
+                            onChange={(brightness) => pushState({ ...state, brightness })}
+                          />
+                        </FaderColumn>
+                      </div>
+                    ) : (
+                      <div className="mt-3 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_5rem] gap-4">
+                        <div className="flex min-h-0 items-center justify-center">
+                          <ColorWheel
+                            hue={state.hue}
+                            saturation={state.saturation}
+                            onChange={(hue, saturation) => pushState({ ...state, hue, saturation })}
+                            onCommit={(hue, saturation) => setColorRecents(pushColorRecent(hue, saturation))}
+                          />
+                        </div>
+                        <FaderColumn label="Brightness" value={`${Math.round(state.brightness * 100)}%`}>
+                          <Slider
+                            orientation="vertical"
+                            value={state.brightness}
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            ariaLabel="Brightness"
+                            trackStyle={{ background: "rgba(255,255,255,0.07)" }}
+                            fillStyle={{ background: lightingCssColor(state) }}
+                            onChange={(brightness) => pushState({ ...state, brightness })}
+                          />
+                        </FaderColumn>
+                      </div>
+                    )}
+
+                    <RecentsRow mode={state.mode} cct={cctRecents} color={colorRecents} onPickCct={applyCct} onPickColor={applyColor} />
+                  </Panel>
                 </div>
-              </div>
+                <div className="min-h-0 overflow-hidden rounded-sc-panel border border-sc-border bg-black">
+                  <ScreenRenderer state={state} preview />
+                </div>
+              </>
+            ) : (
+              <>
+                <SharePanel
+                  title={`${active.name} root`}
+                  code={code}
+                  error={error}
+                  onGenerate={generateCode}
+                  onCopyLink={() => copySessionLink(active)}
+                  onCopyCode={copyCode}
+                />
+                <Panel className="flex min-h-0 flex-col">
+                  <div className="flex items-center justify-between gap-3">
+                    <Kicker>Screens</Kicker>
+                    <span className="text-[12px] text-sc-faint tabular-nums">{active.screens.length}</span>
+                  </div>
+                  <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+                    {active.screens.map((item) => (
+                      <button
+                        key={item.screenId}
+                        type="button"
+                        onClick={() => selectScreen(item)}
+                        className="flex h-12 w-full items-center justify-between rounded-sc-control border border-sc-border bg-sc-card px-4 text-left transition hover:border-sc-border-strong hover:bg-sc-elevated"
+                      >
+                        <span className="truncate text-[14px] font-medium text-sc-text">{item.name}</span>
+                        <span className="shrink-0 text-[12px] text-sc-faint">Open ›</span>
+                      </button>
+                    ))}
+                    {!active.screens.length ? <CenterNote title="No screens yet" body="Create a screen in the left rail to control lighting." /> : null}
+                  </div>
+                </Panel>
+              </>
             )}
           </div>
         </section>
-
-        <aside className={`${crampedLayout ? "min-h-[420px]" : "overflow-hidden border-l"} border-white/[0.08] bg-[#050505] p-3`}>
-          {active ? (
-            <div className="flex h-full flex-col gap-3">
-              <section className="shrink-0 rounded-[18px] border border-white/[0.08] bg-[#0a0a0b] p-3">
-                <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-white/34">Verification</p>
-                <p className="mt-2 truncate text-[15px] font-semibold text-white">{codeTargetScreen ? codeTargetScreen.name : `${active.name} root`}</p>
-                <p className="mt-1 truncate text-[12px] text-white/32">{codeTargetScreen?.screenUrl || active.sessionUrl}</p>
-                <button onClick={generateCode} className="mt-3 h-9 w-full rounded-full bg-white text-[13px] font-semibold text-black transition hover:bg-white/85">Generate verification code</button>
-                {code ? (
-                  <div className="mt-3 rounded-[14px] bg-white p-2.5 text-black">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-black/45">Code</p>
-                      <button type="button" onClick={copyCode} className="rounded-full bg-black px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-black/80">Copy</button>
-                    </div>
-                    <input readOnly value={code} onFocus={(event) => event.currentTarget.select()} className="mt-2 h-11 w-full select-all rounded-[10px] border border-black/10 bg-black/[0.04] px-3 text-center text-[28px] font-semibold tracking-[0.16em] text-black outline-none focus:border-black/30" />
-                  </div>
-                ) : null}
-                {error ? <p className="mt-2 text-[12px] text-[#ff6961]">{error}</p> : null}
-              </section>
-
-              {codeTargetScreen ? <ControlPanel state={state} setState={pushState} /> : (
-                <section className="rounded-[18px] border border-white/[0.08] bg-[#0a0a0b] p-3 text-[13px] leading-5 text-white/45">
-                  Root session is selected. It can generate a chooser code, but it has no lighting controls. Select a screen to control lighting.
-                </section>
-              )}
-            </div>
-          ) : (
-            <div className="flex h-full items-center justify-center text-center text-[14px] text-white/42">Create or reopen a session.</div>
-          )}
-        </aside>
       </div>
       {showClientConfirm ? <ClientConfirmModal onCancel={() => setShowClientConfirm(false)} /> : null}
       {backendModalMessage ? <BackendUnavailableModal message={backendModalMessage} /> : null}
@@ -307,186 +410,215 @@ export default function AdminPage() {
   );
 }
 
-function ControlPanel({ state, setState }: { state: LightingState; setState: (state: LightingState) => void }) {
-  const meta = presetLibrary.find((preset) => preset.value === state.preset) || presetLibrary[0];
-  const controls = new Set(meta.controls);
-
-  function selectPreset(value: LightingPreset) {
-    const next = stateFromPreset(value);
-    if (next) setState(next);
-  }
-
-  const directionOptions = [{ value: "right", label: "Left to right" }, { value: "left", label: "Right to left" }, { value: "down", label: "Top to bottom" }, { value: "up", label: "Bottom to top" }];
-
-  function updateColor(index: number, color: string) {
-    const colors = ensureColors(state.colors, meta.colorSlots);
-    colors[index] = color;
-    setState({ ...state, palette: "custom", colors });
-  }
-
+function ContextBar({ sessionName, screenName, hasSession }: { sessionName?: string; screenName?: string; hasSession: boolean }) {
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto rounded-[18px] border border-white/[0.08] bg-[#0a0a0b] p-3">
-      <GlobalBrightness value={state.brightness} onChange={(brightness) => setState({ ...state, brightness })} />
-
-      <div className="space-y-3">
-        {lightingModes.map((mode) => {
-          const presets = presetLibrary.filter((preset) => preset.mode === mode.value);
-          return (
-            <section key={mode.value}>
-              <div className="mb-1.5 px-1">
-                <p className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${state.mode === mode.value ? "text-white/72" : "text-white/34"}`}>{mode.label}</p>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {presets.map((preset) => <PresetCard key={preset.value} active={state.preset === preset.value} preset={preset} onClick={() => selectPreset(preset.value)} />)}
-              </div>
-            </section>
-          );
-        })}
-      </div>
-
-      {controls.has("palette") ? (
-        <div className="mt-3">
-          <Field label="Palette">
-            <select value={state.palette} onChange={(event) => { const palette = palettes.find((item) => item.value === event.target.value); if (palette) setState({ ...state, palette: palette.value, colors: palette.colors }); }} className="h-9 w-full rounded-[10px] border border-white/[0.08] bg-black px-3 text-[13px] text-white outline-none focus:border-white/25">
-              {palettes.map((palette) => <option key={palette.value} value={palette.value}>{palette.label}</option>)}
-            </select>
-          </Field>
-          <div className="mt-2 flex h-6 overflow-hidden rounded-full border border-white/[0.08]">
-            {(palettes.find((palette) => palette.value === state.palette)?.colors || state.colors).slice(0, 6).map((color) => <span key={color} className="flex-1" style={{ background: color }} />)}
-          </div>
-        </div>
+    <div className="flex h-14 shrink-0 items-center gap-2 border-b border-sc-border px-5">
+      <span className="truncate text-[13px] text-sc-muted">{sessionName || "No session"}</span>
+      {hasSession ? (
+        <>
+          <span className="text-sc-faint">›</span>
+          <span className="truncate text-[16px] font-semibold text-sc-text">{screenName || "root"}</span>
+        </>
       ) : null}
+    </div>
+  );
+}
 
-      {controls.has("colors") ? (
-        <div className="mt-3">
-          <label className="text-[10px] font-medium uppercase tracking-[0.12em] text-white/34">Custom colors</label>
-          <div className="mt-1.5 grid grid-cols-6 gap-1.5">
-            {ensureColors(state.colors, controls.has("colorCount") ? state.colorCount : meta.colorSlots).map((color, index) => <Color key={index} value={color} onChange={(next) => updateColor(index, next)} />)}
-          </div>
-        </div>
-      ) : null}
-
-      {controls.has("direction") ? (
-        <div className="mt-3">
-          <Field label="Direction">
-            <select value={state.rgbDirection} onChange={(event) => setState({ ...state, rgbDirection: event.target.value as RgbDirection })} className="h-9 w-full rounded-[10px] border border-white/[0.08] bg-black px-3 text-[13px] text-white outline-none focus:border-white/25">
-              {directionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </Field>
-        </div>
-      ) : null}
-
-      {controls.size ? <div className="mt-2">
-        {controls.has("speed") ? <Slider label="Motion" value={state.speed} onChange={(speed) => setState({ ...state, speed })} /> : null}
-        {controls.has("colorCount") ? <ColorCount value={state.colorCount} onChange={(colorCount) => setState({ ...state, colorCount, colors: ensureColors(state.colors, colorCount) })} /> : null}
-        {controls.has("intensity") ? <Slider label="Energy" value={state.intensity} onChange={(intensity) => setState({ ...state, intensity })} /> : null}
-        {controls.has("spread") ? <Slider label="Size" value={state.spread} onChange={(spread) => setState({ ...state, spread })} /> : null}
-        {controls.has("softness") ? <Slider label="Feather" value={state.softness} onChange={(softness) => setState({ ...state, softness })} /> : null}
-        {controls.has("temperature") ? <Temperature value={state.temperature} onChange={(temperature) => setState({ ...state, temperature })} /> : null}
-      </div> : null}
+function RailSection({ title, form, children }: { title: string; form: ReactNode; children: ReactNode }) {
+  return (
+    <section className="flex min-h-0 flex-1 flex-col p-3">
+      <Kicker>{title}</Kicker>
+      <div className="mt-2 shrink-0">{form}</div>
+      <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">{children}</div>
     </section>
   );
 }
 
-function PresetCard({ active, preset, onClick }: { active: boolean; preset: (typeof presetLibrary)[number]; onClick: () => void }) {
+function RailCreate({ value, onChange, onSubmit, placeholder, label, disabled }: { value: string; onChange: (value: string) => void; onSubmit: (event: FormEvent) => void; placeholder: string; label: string; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} className={`flex h-9 items-center justify-between rounded-[10px] border px-3 text-left text-[12px] font-semibold tracking-[-0.02em] transition ${active ? "border-white bg-white text-black" : "border-white/[0.08] bg-black text-white/62 hover:border-white/[0.18] hover:bg-white/[0.06] hover:text-white"}`}>
-      <span className="truncate">{preset.label}</span>
-      {active ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-black/55" /> : null}
+    <form onSubmit={onSubmit} className="flex gap-2">
+      <FieldInput aria-label={label} disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="flex-1" />
+      <SecondaryButton type="submit" disabled={disabled} aria-label={label} className="shrink-0 px-3 text-[18px] leading-none">+</SecondaryButton>
+    </form>
+  );
+}
+
+function RailRow({ name, meta, dot, selected, menuOpen, onSelect, onToggleMenu, menu }: {
+  name: string;
+  meta?: string;
+  dot?: boolean;
+  selected: boolean;
+  menuOpen: boolean;
+  onSelect: () => void;
+  onToggleMenu: () => void;
+  menu: ReactNode;
+}) {
+  return (
+    <div className="relative flex items-center gap-1">
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`flex h-11 flex-1 items-center gap-2 rounded-sc-control border px-3 text-left transition ${selected ? "border-sc-border-strong bg-sc-elevated text-sc-text" : "border-transparent text-sc-muted hover:bg-sc-card hover:text-sc-text"}`}
+      >
+        {dot ? <span className={`h-2 w-2 shrink-0 rounded-full ${selected ? "bg-sc-text" : "bg-sc-faint"}`} /> : null}
+        <span className="flex-1 truncate text-[14px] font-medium">{name}</span>
+        {meta ? <span className="shrink-0 text-[12px] text-sc-faint tabular-nums">{meta}</span> : null}
+      </button>
+      <button
+        type="button"
+        aria-label={`Open ${name} menu`}
+        onClick={onToggleMenu}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-sc-control text-[18px] leading-none transition ${menuOpen ? "bg-sc-card text-sc-text" : "text-sc-faint hover:bg-sc-card hover:text-sc-text"}`}
+      >
+        ⋯
+      </button>
+      {menuOpen ? <div className="absolute right-0 top-11 z-20 w-44 overflow-hidden rounded-sc-card border border-sc-border bg-sc-elevated shadow-2xl">{menu}</div> : null}
+    </div>
+  );
+}
+
+function MenuItem({ children, danger = false, onClick }: { children: ReactNode; danger?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className={`block h-9 w-full px-3 text-left text-[13px] transition hover:bg-white/[0.08] ${danger ? "text-sc-danger" : "text-sc-muted hover:text-sc-text"}`}>{children}</button>
+  );
+}
+
+function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <section className={`min-h-0 rounded-sc-panel border border-sc-border bg-sc-panel p-4 ${className}`}>{children}</section>;
+}
+
+function Segmented({ value, onChange, options }: { value: LightingMode; onChange: (value: LightingMode) => void; options: { value: LightingMode; label: string }[] }) {
+  return (
+    <div className="inline-flex rounded-sc-control border border-sc-border bg-sc-card p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={`h-8 rounded-[4px] px-4 text-[13px] font-semibold transition ${value === option.value ? "bg-sc-elevated text-sc-text" : "text-sc-muted hover:text-sc-text"}`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FaderColumn({ label, value, children }: { label: string; value: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-col items-center rounded-sc-card border border-sc-border bg-black/40 px-2 py-3">
+      <p className="text-[12px] font-semibold text-sc-muted">{label}</p>
+      <p className="mt-1 truncate text-[19px] font-semibold leading-none tabular-nums text-sc-text">{value}</p>
+      <div className="mt-3 flex min-h-0 w-full flex-1 justify-center">{children}</div>
+    </div>
+  );
+}
+
+function PresetChip({ color, label, active, onClick }: { color: string; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex h-9 items-center gap-2 rounded-sc-control border px-3 text-left text-[13px] font-medium transition ${active ? "border-sc-border-strong bg-sc-elevated text-sc-text" : "border-sc-border bg-sc-card text-sc-muted hover:text-sc-text"}`}
+    >
+      <span className="h-4 w-4 shrink-0 rounded-full border border-black/20" style={{ background: color }} />
+      <span className="truncate tabular-nums">{label}</span>
     </button>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="block"><span className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-white/34">{label}</span>{children}</label>;
-}
-
-function Color({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  return <input aria-label="Custom color" type="color" value={value} onChange={(event) => onChange(event.target.value)} className="h-7 w-full rounded-[8px] border border-white/[0.08] bg-black" />;
-}
-
-function GlobalBrightness({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+function RecentsRow({ mode, cct, color, onPickCct, onPickColor }: {
+  mode: LightingMode;
+  cct: number[];
+  color: ColorRecent[];
+  onPickCct: (temperature: number) => void;
+  onPickColor: (hue: number, saturation: number) => void;
+}) {
+  const empty = mode === "cct" ? !cct.length : !color.length;
   return (
-    <section className="mb-3 rounded-[14px] border border-white/[0.12] bg-[#050505] p-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/46">Brightness</p>
-        <p className="text-[18px] font-semibold tabular-nums tracking-[-0.04em] text-white">{Math.round(value * 100)}</p>
+    <div className="mt-3 flex h-9 shrink-0 items-center gap-2">
+      <span className="text-[11px] font-medium text-sc-faint">Recent</span>
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+        {mode === "cct"
+          ? cct.map((temperature) => <Swatch key={temperature} color={kelvinToCssColor(temperature)} title={`${temperature}K`} onClick={() => onPickCct(temperature)} />)
+          : color.map((item, index) => <Swatch key={`${item.hue}-${item.saturation}-${index}`} color={hsvToCssColor(item.hue, item.saturation, 1)} title={`H${Math.round(item.hue)} S${Math.round(item.saturation * 100)}`} onClick={() => onPickColor(item.hue, item.saturation)} />)}
+        {empty ? <span className="text-[12px] text-sc-faint">None yet</span> : null}
       </div>
-      <div className="relative h-9 overflow-hidden rounded-[8px] border border-white/[0.12] bg-black">
-        <div className="absolute inset-y-0 left-0 bg-white" style={{ width: `${Math.round(value * 100)}%` }} />
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,.18)_0_1px,transparent_1px_10%)]" />
-        <input
-          aria-label="Brightness"
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={value}
-          onChange={(event) => onChange(Number(event.target.value))}
-          className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0"
-        />
-      </div>
-    </section>
+    </div>
   );
 }
 
-function ColorCount({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  return <label className="mt-2 block text-[12px] font-medium text-white/52"><span className="flex justify-between"><span>Colors</span><span className="text-white/28">{value}</span></span><input type="range" min="2" max="6" step="1" value={value} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 w-full accent-white" /></label>;
+function Swatch({ color, title, onClick }: { color: string; title: string; onClick: () => void }) {
+  return <button type="button" title={title} onClick={onClick} className="h-7 w-7 shrink-0 rounded-full border border-sc-border-strong" style={{ background: color }} />;
 }
 
-function Slider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return <label className="mt-2 block text-[12px] font-medium text-white/52"><span className="flex justify-between"><span>{label}</span><span className="text-white/28">{Math.round(value * 100)}</span></span><input type="range" min="0" max="1" step="0.01" value={value} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 w-full accent-white" /></label>;
+function SharePanel({ title, code, error, onGenerate, onCopyLink, onCopyCode }: {
+  title: string;
+  code: string;
+  error: string;
+  onGenerate: () => void;
+  onCopyLink: () => void;
+  onCopyCode: () => void;
+}) {
+  return (
+    <Panel className="shrink-0">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <Kicker>Verification</Kicker>
+          <h2 className="mt-2 truncate text-[18px] font-semibold text-sc-text">{title}</h2>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <SecondaryButton type="button" onClick={onCopyLink}>Copy link</SecondaryButton>
+          <PrimaryButton type="button" onClick={onGenerate}>Generate</PrimaryButton>
+        </div>
+      </div>
+      <div className="mt-4 rounded-sc-card border border-sc-border-strong bg-sc-primary p-3 text-sc-primary-fg">
+        <div className="flex h-8 items-center justify-between gap-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-black/45">Code</p>
+          {code ? <button type="button" onClick={onCopyCode} className="h-8 rounded-sc-control bg-black px-3 text-[12px] font-semibold text-white transition hover:bg-black/80">Copy</button> : null}
+        </div>
+        <input readOnly value={code} placeholder="— — — — — —" onFocus={(event) => event.currentTarget.select()} className="mt-2 h-12 w-full select-all rounded-sc-control border border-black/10 bg-black/[0.04] px-3 text-center text-[30px] font-semibold tracking-[0.16em] text-black outline-none placeholder:text-black/25 focus:border-black/30" />
+      </div>
+      {error && !isBackendUnavailableMessage(error) ? <p className="mt-3 text-[13px] text-sc-danger">{error}</p> : null}
+    </Panel>
+  );
 }
 
-function Temperature({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  return <label className="mt-2 block text-[12px] font-medium text-white/52"><span className="flex justify-between"><span>Temperature</span><span className="text-white/28">{Math.round(value)}K</span></span><input type="range" min="1800" max="10000" step="50" value={value} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 w-full accent-white" /></label>;
+function CenterNote({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="flex h-full min-h-[160px] flex-col items-center justify-center text-center">
+      <p className="text-[15px] font-semibold text-sc-text">{title}</p>
+      <p className="mt-1 max-w-[280px] text-[13px] leading-5 text-sc-muted">{body}</p>
+    </div>
+  );
 }
 
-function ensureColors(colors: string[], count: number) {
-  const fallback = ["#ff0000", "#00ff55", "#0066ff", "#ff00cc", "#fff200", "#00e5ff"];
-  return Array.from({ length: count }, (_, index) => colors[index] || fallback[index] || "#ffffff");
+function EmptyText({ children }: { children: ReactNode }) {
+  return <p className="px-1 py-2 text-[12px] leading-5 text-sc-faint">{children}</p>;
 }
 
-function Preview({ state }: { state: LightingState }) {
-  return <ScreenRenderer state={state} preview />;
-}
-
-function upsertSession(sessions: LocalSession[], next: LocalSession) {
+function upsertSession(sessions: SessionSummary[], next: SessionSummary) {
   const existing = sessions.find((session) => session.sessionId === next.sessionId);
   if (!existing) return [next, ...sessions];
   return sessions.map((session) => session.sessionId === next.sessionId ? { ...next, screens: existing.screens } : session);
 }
 
-function upsertScreen(screens: LocalScreen[], next: LocalScreen) {
-  return screens.some((screen) => screen.subSessionId === next.subSessionId) ? screens.map((screen) => screen.subSessionId === next.subSessionId ? next : screen) : [...screens, next];
-}
-
-function statusPillClass(status: string) {
-  return status === "connected"
-    ? "rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-1 text-emerald-200"
-    : "rounded-full border border-white/[0.08] px-2 py-1 text-white/45";
+function upsertScreen(screens: ScreenSummary[], next: ScreenSummary) {
+  return screens.some((screen) => screen.screenId === next.screenId) ? screens.map((screen) => screen.screenId === next.screenId ? next : screen) : [...screens, next];
 }
 
 function ClientConfirmModal({ onCancel }: { onCancel: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-5 backdrop-blur-md">
-      <section className="w-full max-w-[360px] rounded-[24px] border border-white/[0.12] bg-[#0a0a0b]/95 p-5 text-center shadow-2xl">
-        <div className="mx-auto h-3 w-3 rounded-full bg-white" />
-        <h2 className="mt-4 text-[22px] font-semibold tracking-[-0.04em] text-white">Go to client page?</h2>
-        <p className="mx-auto mt-2 max-w-[260px] text-[13px] leading-5 text-white/45">This leaves the admin console and returns to the verification code screen.</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-5 backdrop-blur-md">
+      <section className="w-full max-w-[360px] rounded-sc-dialog border border-sc-border-strong bg-sc-panel p-5 text-center shadow-2xl">
+        <div className="mx-auto h-3 w-3 rounded-full bg-sc-primary" />
+        <h2 className="mt-4 text-[22px] font-semibold text-sc-text">Go to client page?</h2>
+        <p className="mx-auto mt-2 max-w-[260px] text-[13px] leading-5 text-sc-muted">This leaves the admin console and returns to the verification code screen.</p>
         <div className="mt-5 grid grid-cols-2 gap-2">
-          <button type="button" onClick={onCancel} className="h-10 rounded-full border border-white/[0.12] text-[13px] font-semibold text-white/72 transition hover:bg-white/[0.08] hover:text-white">Cancel</button>
-          <button type="button" onClick={() => { window.location.href = "/"; }} className="h-10 rounded-full bg-white text-[13px] font-semibold text-black transition hover:bg-white/85">Go to client</button>
+          <SecondaryButton type="button" onClick={onCancel}>Cancel</SecondaryButton>
+          <PrimaryButton type="button" onClick={() => { window.location.href = "/"; }}>Go to client</PrimaryButton>
         </div>
       </section>
-    </div>
-  );
-}
-
-function CrampedLayoutWarning() {
-  return (
-    <div className="sticky top-0 z-30 border-b border-amber-300/15 bg-amber-300/10 px-4 py-2 text-center text-[12px] font-medium text-amber-100 backdrop-blur-md">
-      Admin workspace is cramped. Reduce browser zoom or widen the window for the full three-panel layout.
     </div>
   );
 }

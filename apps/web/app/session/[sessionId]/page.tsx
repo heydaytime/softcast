@@ -5,25 +5,35 @@ import { useParams } from "next/navigation";
 import { useSoftcast } from "@/lib/use-softcast";
 import { isBackendUnavailableMessage } from "@/lib/backend";
 import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
+import { SecondaryLink, SoftcastHeader } from "@/lib/ui";
 
 export default function SessionPage() {
   const params = useParams<{ sessionId: string }>();
   const sessionId = params.sessionId;
-  const { subSessionIds, status } = useSoftcast({ sessionId });
+  const { screens, status } = useSoftcast({ sessionId });
   const backendError = isBackendUnavailableMessage(status) ? status : "";
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-black p-5 text-[#f5f5f7]">
-      <section className="w-full max-w-[520px]">
-        <p className="text-center text-[13px] text-white/34">Root session</p>
-        <h1 className="mt-2 text-center text-[34px] font-semibold tracking-[-0.04em] text-white">Choose a screen</h1>
-        <p className="mx-auto mt-3 max-w-[360px] text-center text-[14px] leading-6 text-white/45">Status: <span className={status === "connected" ? "font-medium text-emerald-300" : "text-white/45"}>{status}</span>. This page only routes this display into a screen.</p>
-        <div className="mt-8 divide-y divide-white/[0.07] overflow-hidden rounded-[18px] border border-white/[0.08] bg-[#070708]">
-          {subSessionIds.map((subSessionId) => (
-            <Link key={subSessionId} href={`/screen/${sessionId}/${subSessionId}`} className="flex h-14 items-center justify-between px-4 text-[15px] text-white/72 transition hover:bg-white/[0.06] hover:text-white"><span>Screen {subSessionId.slice(0, 8)}</span><span className="text-white/25">Open</span></Link>
-          ))}
+    <main className="flex min-h-dvh flex-col bg-sc-bg text-sc-text">
+      <SoftcastHeader action={<SecondaryLink href="/">Enter code</SecondaryLink>} />
+      <section className="flex flex-1 items-start justify-center px-5 py-16 sm:items-center sm:py-10">
+        <div className="w-full max-w-[680px] rounded-sc-dialog border border-sc-border bg-sc-panel p-6 shadow-2xl sm:p-8">
+          <p className="text-[13px] font-medium text-sc-muted">Root session</p>
+          <div className="mt-3 flex items-end justify-between gap-4">
+            <h1 className="text-[40px] font-semibold leading-none text-sc-text">Choose a screen</h1>
+            <span className="hidden rounded-full border border-sc-border bg-sc-card px-3 py-1 text-[12px] font-medium text-sc-muted sm:inline">{screens.length} available</span>
+          </div>
+
+          <div className="mt-8 overflow-hidden rounded-sc-panel border border-sc-border bg-black/35">
+            {screens.map((screen) => (
+              <Link key={screen.screenId} href={`/screen/${sessionId}/${screen.screenId}`} className="flex h-14 items-center justify-between border-b border-sc-border px-4 text-[15px] text-sc-muted transition last:border-b-0 hover:bg-sc-card hover:text-sc-text">
+                <span>{screen.name}</span>
+                <span className="text-[13px] text-sc-faint">Open</span>
+              </Link>
+            ))}
+            {!screens.length ? <p className="p-5 text-[14px] text-sc-muted">No screens have been created yet.</p> : null}
+          </div>
         </div>
-        {!subSessionIds.length ? <p className="mt-6 text-center text-[14px] text-white/42">No screens have been created yet.</p> : null}
       </section>
       {backendError ? <BackendUnavailableModal message={backendError} /> : null}
     </main>

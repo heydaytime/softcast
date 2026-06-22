@@ -1,0 +1,14 @@
+# Softcast backend reverse proxy (Raspberry Pi).
+#
+# Public TLS for api.softcast.studio is terminated by Cloudflare, which forwards
+# the request into this Pi over the WireGuard path on plain HTTP (port 80).
+# Caddy therefore serves HTTP only and reverse-proxies to the Bun backend.
+#
+# reverse_proxy transparently forwards WebSocket upgrades, so /ws works too.
+#
+# If your Cloudflare path sends a different Host header or hits a different port,
+# change the site address below (e.g. to a bare `:80` catch-all, or another port).
+
+http://api.softcast.studio {
+	reverse_proxy 127.0.0.1:4000
+}

@@ -1,0 +1,28 @@
+# Softcast backend systemd unit (Raspberry Pi).
+#
+# Install:
+#   sudo cp /home/heyday/softcast/deploy/softcast-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now softcast-backend
+#
+# Secrets/config live in /etc/softcast/backend.env (NOT in the repo), 0600 root.
+# The backend handles SIGTERM for a clean WebSocket/Redis shutdown.
+
+[Unit]
+Description=Softcast backend (Bun HTTP/WebSocket server)
+After=network-online.target redis-server.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=heyday
+WorkingDirectory=/home/heyday/softcast
+EnvironmentFile=/etc/softcast/backend.env
+ExecStart=/home/heyday/.bun/bin/bun services/backend/src/index.ts
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,18 +1,43 @@
 @import "tailwindcss";
 
+@theme {
+  --color-sc-bg: #050607;
+  --color-sc-rail: #090a0c;
+  --color-sc-panel: #0d0f12;
+  --color-sc-card: #14171b;
+  --color-sc-elevated: #1a1e23;
+  --color-sc-border: rgb(255 255 255 / 0.10);
+  --color-sc-border-strong: rgb(255 255 255 / 0.18);
+  --color-sc-text: #f4f5f6;
+  --color-sc-muted: rgb(244 245 246 / 0.58);
+  --color-sc-faint: rgb(244 245 246 / 0.34);
+  --color-sc-primary: #f4f5f6;
+  --color-sc-primary-fg: #0d0f12;
+  --color-sc-admin: #e5484d;
+  --color-sc-admin-hover: #f2555a;
+  --color-sc-admin-fg: #ffffff;
+  --color-sc-warm: #ffd08a;
+  --color-sc-cool: #a7d8ff;
+  --color-sc-danger: #ff6b64;
+  --radius-sc-control: 6px;
+  --radius-sc-card: 8px;
+  --radius-sc-panel: 12px;
+  --radius-sc-dialog: 16px;
+}
+
 :root {
   color-scheme: dark;
-  background: #000;
+  background: var(--color-sc-bg);
 }
 
 html, body {
   margin: 0;
   min-height: 100vh;
-  background: #000;
+  background: var(--color-sc-bg);
 }
 
 body {
-  color: #f5f5f7;
+  color: var(--color-sc-text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;

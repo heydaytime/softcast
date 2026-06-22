@@ -9,3 +9,7 @@ build
 bun.lock
 *.log
 .DS_Store
+
+# agent tooling (not project code)
+.agents/
+skills-lock.json
