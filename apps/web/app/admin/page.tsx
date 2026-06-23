@@ -10,11 +10,16 @@ import { Slider } from "@/lib/Slider";
 import { ColorWheel } from "@/lib/ColorWheel";
 import { getCctRecents, getColorRecents, pushCctRecent, pushColorRecent, type ColorRecent } from "@/lib/recents";
 import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { AuthControls, FieldInput, Kicker, PrimaryButton, SecondaryButton, SoftcastHeader } from "@/lib/ui";
 
 // Ordered cool→warm (high→low Kelvin) so the chips read top-to-bottom in the same
 // direction as the vertical CCT gradient bar (blue/cool at top, orange/warm at bottom).
 const cctPresets = [6500, 5600, 4300, 3200, 2700];
+
+// Below the desktop breakpoint the console collapses to one pane at a time, navigated
+// by a top tab strip. Above it, the full three-region layout renders unchanged.
+type TabKey = "library" | "control" | "preview";
 
 export default function AdminPage() {
   const { getToken, isLoaded } = useAuth();
@@ -32,6 +37,8 @@ export default function AdminPage() {
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [cctRecents, setCctRecents] = useState<number[]>([]);
   const [colorRecents, setColorRecents] = useState<ColorRecent[]>([]);
+  const isDesktop = useMediaQuery("(min-width: 1280px)");
+  const [activeTab, setActiveTab] = useState<TabKey>("library");
 
   useEffect(() => {
     setCctRecents(getCctRecents());
@@ -78,8 +85,9 @@ export default function AdminPage() {
     if (active && activeScreenId && !active.screens.some((item) => item.screenId === activeScreenId)) {
       setActiveScreenId("");
       setCode("");
+      if (!isDesktop) setActiveTab("library");
     }
-  }, [active, activeScreenId]);
+  }, [active, activeScreenId, isDesktop]);
 
   useEffect(() => {
     setState(screenSync.state);
@@ -91,6 +99,8 @@ export default function AdminPage() {
     setCode("");
     setSessionMenuId("");
     setScreenMenuId("");
+    // Stay in the Library tab so the session's screens list is right there to pick from.
+    if (!isDesktop) setActiveTab("library");
   }
 
   function selectScreen(item: ScreenSummary) {
@@ -98,6 +108,8 @@ export default function AdminPage() {
     setCode("");
     setSessionMenuId("");
     setScreenMenuId("");
+    // Picking a screen means "control this light" — jump to the controls on small screens.
+    if (!isDesktop) setActiveTab("control");
   }
 
   async function addSession(event: FormEvent) {
@@ -148,6 +160,7 @@ export default function AdminPage() {
       setSessions(sessions.map((session) => session.sessionId === active.sessionId ? { ...session, screens: upsertScreen(session.screens, created) } : session));
       setActiveScreenId(created.screenId);
       setCode("");
+      if (!isDesktop) setActiveTab("control");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not create screen");
     }
@@ -215,195 +228,243 @@ export default function AdminPage() {
     setColorRecents(pushColorRecent(hue, saturation));
   }
 
+  // Shared region builders, reused by both the desktop (three-pane) and compact (tabbed)
+  // layouts so the two branches can never drift. Compact-only sizing is applied with
+  // `max-xl:` utilities, which are inert at the desktop breakpoint.
+  const libraryRail = (scroll: boolean) => (
+    <>
+      <RailSection
+        scroll={scroll}
+        title="Sessions"
+        form={<RailCreate value={sessionName} onChange={setSessionName} onSubmit={addSession} placeholder="Session name" label="Add session" />}
+      >
+        {sessions.map((session) => (
+          <RailRow
+            key={session.sessionId}
+            name={session.name}
+            meta={`${session.screens.length}`}
+            selected={session.sessionId === activeSessionId && !activeScreenId}
+            menuOpen={sessionMenuId === session.sessionId}
+            onSelect={() => selectSession(session)}
+            onToggleMenu={() => { setScreenMenuId(""); setSessionMenuId(sessionMenuId === session.sessionId ? "" : session.sessionId); }}
+            menu={(
+              <>
+                <MenuItem onClick={() => copySessionLink(session)}>Copy link</MenuItem>
+                <MenuItem danger onClick={() => removeSession(session)}>Delete session</MenuItem>
+              </>
+            )}
+          />
+        ))}
+        {!workspaceLoaded ? <EmptyText>Loading your sessions…</EmptyText> : null}
+        {workspaceLoaded && !sessions.length ? <EmptyText>Create a session to begin.</EmptyText> : null}
+      </RailSection>
+
+      <div className="h-px shrink-0 bg-sc-border" />
+
+      <RailSection
+        scroll={scroll}
+        title="Screens"
+        form={<RailCreate value={screenName} onChange={setScreenName} onSubmit={addScreen} placeholder="Screen name" label="Add screen" disabled={!active} />}
+      >
+        {active?.screens.map((item) => (
+          <RailRow
+            key={item.screenId}
+            name={item.name}
+            dot
+            selected={item.screenId === activeScreenId}
+            menuOpen={screenMenuId === item.screenId}
+            onSelect={() => selectScreen(item)}
+            onToggleMenu={() => { setSessionMenuId(""); setScreenMenuId(screenMenuId === item.screenId ? "" : item.screenId); }}
+            menu={(
+              <>
+                <MenuItem onClick={() => copyScreenLink(item)}>Copy link</MenuItem>
+                <MenuItem danger onClick={() => removeScreen(item)}>Delete screen</MenuItem>
+              </>
+            )}
+          />
+        ))}
+        {!active ? <EmptyText>Select a session first.</EmptyText> : null}
+        {active && !active.screens.length ? <EmptyText>Create a screen to control lighting.</EmptyText> : null}
+      </RailSection>
+    </>
+  );
+
+  const sharePanelEl = screen ? (
+    <SharePanel title={screen.name} code={code} error={error} onGenerate={generateCode} onCopyLink={() => copyScreenLink(screen)} onCopyCode={copyCode} />
+  ) : active ? (
+    <SharePanel title={`${active.name} root`} code={code} error={error} onGenerate={generateCode} onCopyLink={() => copySessionLink(active)} onCopyCode={copyCode} />
+  ) : null;
+
+  const lightingPanel = (
+    <Panel className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-3">
+        <Kicker>Fill light</Kicker>
+        <Segmented
+          value={state.mode}
+          onChange={setMode}
+          options={[{ value: "cct", label: "White" }, { value: "color", label: "Color" }]}
+        />
+      </div>
+
+      {state.mode === "cct" ? (
+        <div className="mt-3 grid min-h-0 flex-1 grid-cols-[5rem_minmax(0,1fr)_5rem] gap-3 max-xl:h-[min(20rem,45dvh)] max-xl:flex-none">
+          <FaderColumn label="CCT" value={`${Math.round(state.temperature)}K`}>
+            <Slider
+              orientation="vertical"
+              value={state.temperature}
+              min={minTemperature}
+              max={maxTemperature}
+              step={50}
+              ariaLabel="Color temperature"
+              trackStyle={{ background: "linear-gradient(to top, #ff8a3d 0%, #ffd6a0 24%, #f4f6ff 50%, #cfe5ff 74%, #8ec5ff 100%)" }}
+              onChange={(temperature) => pushState({ ...state, temperature })}
+              onCommit={(temperature) => setCctRecents(pushCctRecent(temperature))}
+            />
+          </FaderColumn>
+          <div className="flex min-h-0 flex-col items-stretch justify-center gap-2">
+            {cctPresets.map((preset) => (
+              <PresetChip key={preset} color={kelvinToCssColor(preset)} label={`${preset}K`} active={state.temperature === preset} onClick={() => applyCct(preset)} />
+            ))}
+          </div>
+          <FaderColumn label="Brightness" value={`${Math.round(state.brightness * 100)}%`}>
+            <Slider
+              orientation="vertical"
+              value={state.brightness}
+              min={0}
+              max={1}
+              step={0.01}
+              ariaLabel="Brightness"
+              trackStyle={{ background: "rgba(255,255,255,0.07)" }}
+              fillStyle={{ background: lightingCssColor(state) }}
+              onChange={(brightness) => pushState({ ...state, brightness })}
+            />
+          </FaderColumn>
+        </div>
+      ) : (
+        <div className="mt-3 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_5rem] gap-4 max-xl:h-[min(20rem,45dvh)] max-xl:flex-none">
+          <div className="flex min-h-0 items-center justify-center">
+            <ColorWheel
+              hue={state.hue}
+              saturation={state.saturation}
+              onChange={(hue, saturation) => pushState({ ...state, hue, saturation })}
+              onCommit={(hue, saturation) => setColorRecents(pushColorRecent(hue, saturation))}
+            />
+          </div>
+          <FaderColumn label="Brightness" value={`${Math.round(state.brightness * 100)}%`}>
+            <Slider
+              orientation="vertical"
+              value={state.brightness}
+              min={0}
+              max={1}
+              step={0.01}
+              ariaLabel="Brightness"
+              trackStyle={{ background: "rgba(255,255,255,0.07)" }}
+              fillStyle={{ background: lightingCssColor(state) }}
+              onChange={(brightness) => pushState({ ...state, brightness })}
+            />
+          </FaderColumn>
+        </div>
+      )}
+
+      <RecentsRow mode={state.mode} cct={cctRecents} color={colorRecents} onPickCct={applyCct} onPickColor={applyColor} />
+    </Panel>
+  );
+
+  const screensListPanel = (
+    <Panel className="flex min-h-0 flex-col max-xl:h-[min(20rem,45dvh)]">
+      <div className="flex items-center justify-between gap-3">
+        <Kicker>Screens</Kicker>
+        <span className="text-[12px] text-sc-faint tabular-nums">{active?.screens.length ?? 0}</span>
+      </div>
+      <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+        {active?.screens.map((item) => (
+          <button
+            key={item.screenId}
+            type="button"
+            onClick={() => selectScreen(item)}
+            className="flex h-12 w-full items-center justify-between rounded-sc-control border border-sc-border bg-sc-card px-4 text-left transition hover:border-sc-border-strong hover:bg-sc-elevated"
+          >
+            <span className="truncate text-[14px] font-medium text-sc-text">{item.name}</span>
+            <span className="shrink-0 text-[12px] text-sc-faint">Open ›</span>
+          </button>
+        ))}
+        {active && !active.screens.length ? <CenterNote title="No screens yet" body="Create a screen in the left rail to control lighting." /> : null}
+      </div>
+    </Panel>
+  );
+
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden bg-sc-bg text-sc-text">
       <SoftcastHeader action={<AuthControls />} onBrandClick={() => setShowClientConfirm(true)} />
-      <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] border-t border-black">
-        <aside className="flex min-h-0 flex-col border-r border-sc-border bg-sc-rail">
-          <RailSection
-            title="Sessions"
-            form={<RailCreate value={sessionName} onChange={setSessionName} onSubmit={addSession} placeholder="Session name" label="Add session" />}
-          >
-            {sessions.map((session) => (
-              <RailRow
-                key={session.sessionId}
-                name={session.name}
-                meta={`${session.screens.length}`}
-                selected={session.sessionId === activeSessionId && !activeScreenId}
-                menuOpen={sessionMenuId === session.sessionId}
-                onSelect={() => selectSession(session)}
-                onToggleMenu={() => { setScreenMenuId(""); setSessionMenuId(sessionMenuId === session.sessionId ? "" : session.sessionId); }}
-                menu={(
-                  <>
-                    <MenuItem onClick={() => copySessionLink(session)}>Copy link</MenuItem>
-                    <MenuItem danger onClick={() => removeSession(session)}>Delete session</MenuItem>
-                  </>
-                )}
-              />
-            ))}
-            {!workspaceLoaded ? <EmptyText>Loading your sessions…</EmptyText> : null}
-            {workspaceLoaded && !sessions.length ? <EmptyText>Create a session to begin.</EmptyText> : null}
-          </RailSection>
+      {isDesktop ? (
+        <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] border-t border-black">
+          <aside className="flex min-h-0 flex-col border-r border-sc-border bg-sc-rail">
+            {libraryRail(true)}
+          </aside>
 
-          <div className="h-px shrink-0 bg-sc-border" />
-
-          <RailSection
-            title="Screens"
-            form={<RailCreate value={screenName} onChange={setScreenName} onSubmit={addScreen} placeholder="Screen name" label="Add screen" disabled={!active} />}
-          >
-            {active?.screens.map((item) => (
-              <RailRow
-                key={item.screenId}
-                name={item.name}
-                dot
-                selected={item.screenId === activeScreenId}
-                menuOpen={screenMenuId === item.screenId}
-                onSelect={() => selectScreen(item)}
-                onToggleMenu={() => { setSessionMenuId(""); setScreenMenuId(screenMenuId === item.screenId ? "" : item.screenId); }}
-                menu={(
-                  <>
-                    <MenuItem onClick={() => copyScreenLink(item)}>Copy link</MenuItem>
-                    <MenuItem danger onClick={() => removeScreen(item)}>Delete screen</MenuItem>
-                  </>
-                )}
-              />
-            ))}
-            {!active ? <EmptyText>Select a session first.</EmptyText> : null}
-            {active && !active.screens.length ? <EmptyText>Create a screen to control lighting.</EmptyText> : null}
-          </RailSection>
-        </aside>
-
-        <section className="flex min-h-0 flex-col">
+          <section className="flex min-h-0 flex-col">
+            <ContextBar sessionName={active?.name} screenName={screen?.name} hasSession={Boolean(active)} />
+            <div className="grid min-h-0 flex-1 grid-cols-[24rem_minmax(0,1fr)] gap-4 p-4">
+              {!active ? (
+                <>
+                  <Panel><CenterNote title="No session selected" body="Create or pick a session in the left rail to begin." /></Panel>
+                  <Panel><CenterNote title="Nothing to preview" body="A session groups screens. Select a screen to control a light." /></Panel>
+                </>
+              ) : screen ? (
+                <>
+                  <div className="flex min-h-0 flex-col gap-4">
+                    {sharePanelEl}
+                    {lightingPanel}
+                  </div>
+                  <div className="min-h-0 overflow-hidden rounded-sc-panel border border-sc-border bg-black">
+                    <ScreenRenderer state={state} preview />
+                  </div>
+                </>
+              ) : (
+                <>
+                  {sharePanelEl}
+                  {screensListPanel}
+                </>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col border-t border-black">
           <ContextBar sessionName={active?.name} screenName={screen?.name} hasSession={Boolean(active)} />
-          <div className="grid min-h-0 flex-1 grid-cols-[24rem_minmax(0,1fr)] gap-4 p-4 max-xl:grid-cols-1">
-            {!active ? (
-              <>
-                <Panel><CenterNote title="No session selected" body="Create or pick a session in the left rail to begin." /></Panel>
-                <Panel><CenterNote title="Nothing to preview" body="A session groups screens. Select a screen to control a light." /></Panel>
-              </>
-            ) : screen ? (
-              <>
-                <div className="flex min-h-0 flex-col gap-4">
-                  <SharePanel
-                    title={screen.name}
-                    code={code}
-                    error={error}
-                    onGenerate={generateCode}
-                    onCopyLink={() => copyScreenLink(screen)}
-                    onCopyCode={copyCode}
-                  />
-                  <Panel className="flex min-h-0 flex-1 flex-col">
-                    <div className="flex items-center justify-between gap-3">
-                      <Kicker>Fill light</Kicker>
-                      <Segmented
-                        value={state.mode}
-                        onChange={setMode}
-                        options={[{ value: "cct", label: "White" }, { value: "color", label: "Color" }]}
-                      />
-                    </div>
-
-                    {state.mode === "cct" ? (
-                      <div className="mt-3 grid min-h-0 flex-1 grid-cols-[5rem_minmax(0,1fr)_5rem] gap-3">
-                        <FaderColumn label="CCT" value={`${Math.round(state.temperature)}K`}>
-                          <Slider
-                            orientation="vertical"
-                            value={state.temperature}
-                            min={minTemperature}
-                            max={maxTemperature}
-                            step={50}
-                            ariaLabel="Color temperature"
-                            trackStyle={{ background: "linear-gradient(to top, #ff8a3d 0%, #ffd6a0 24%, #f4f6ff 50%, #cfe5ff 74%, #8ec5ff 100%)" }}
-                            onChange={(temperature) => pushState({ ...state, temperature })}
-                            onCommit={(temperature) => setCctRecents(pushCctRecent(temperature))}
-                          />
-                        </FaderColumn>
-                        <div className="flex min-h-0 flex-col items-stretch justify-center gap-2">
-                          {cctPresets.map((preset) => (
-                            <PresetChip key={preset} color={kelvinToCssColor(preset)} label={`${preset}K`} active={state.temperature === preset} onClick={() => applyCct(preset)} />
-                          ))}
-                        </div>
-                        <FaderColumn label="Brightness" value={`${Math.round(state.brightness * 100)}%`}>
-                          <Slider
-                            orientation="vertical"
-                            value={state.brightness}
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            ariaLabel="Brightness"
-                            trackStyle={{ background: "rgba(255,255,255,0.07)" }}
-                            fillStyle={{ background: lightingCssColor(state) }}
-                            onChange={(brightness) => pushState({ ...state, brightness })}
-                          />
-                        </FaderColumn>
-                      </div>
-                    ) : (
-                      <div className="mt-3 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_5rem] gap-4">
-                        <div className="flex min-h-0 items-center justify-center">
-                          <ColorWheel
-                            hue={state.hue}
-                            saturation={state.saturation}
-                            onChange={(hue, saturation) => pushState({ ...state, hue, saturation })}
-                            onCommit={(hue, saturation) => setColorRecents(pushColorRecent(hue, saturation))}
-                          />
-                        </div>
-                        <FaderColumn label="Brightness" value={`${Math.round(state.brightness * 100)}%`}>
-                          <Slider
-                            orientation="vertical"
-                            value={state.brightness}
-                            min={0}
-                            max={1}
-                            step={0.01}
-                            ariaLabel="Brightness"
-                            trackStyle={{ background: "rgba(255,255,255,0.07)" }}
-                            fillStyle={{ background: lightingCssColor(state) }}
-                            onChange={(brightness) => pushState({ ...state, brightness })}
-                          />
-                        </FaderColumn>
-                      </div>
-                    )}
-
-                    <RecentsRow mode={state.mode} cct={cctRecents} color={colorRecents} onPickCct={applyCct} onPickColor={applyColor} />
-                  </Panel>
+          <TabBar
+            value={activeTab}
+            onChange={setActiveTab}
+            tabs={[
+              { value: "library", label: "Library" },
+              { value: "control", label: "Control", disabled: !active },
+              { value: "preview", label: "Preview", disabled: !screen },
+            ]}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {activeTab === "library" ? (
+              <div className="bg-sc-rail">{libraryRail(false)}</div>
+            ) : activeTab === "control" ? (
+              active ? (
+                <div className="flex flex-col gap-4 p-4">
+                  {sharePanelEl}
+                  {screen ? lightingPanel : screensListPanel}
                 </div>
-                <div className="min-h-0 overflow-hidden rounded-sc-panel border border-sc-border bg-black">
+              ) : (
+                <div className="p-4"><Panel><CenterNote title="No session selected" body="Pick or create a session in the Library tab." /></Panel></div>
+              )
+            ) : screen ? (
+              <div className="h-full p-4">
+                <div className="h-full min-h-[260px] overflow-hidden rounded-sc-panel border border-sc-border bg-black">
                   <ScreenRenderer state={state} preview />
                 </div>
-              </>
+              </div>
             ) : (
-              <>
-                <SharePanel
-                  title={`${active.name} root`}
-                  code={code}
-                  error={error}
-                  onGenerate={generateCode}
-                  onCopyLink={() => copySessionLink(active)}
-                  onCopyCode={copyCode}
-                />
-                <Panel className="flex min-h-0 flex-col">
-                  <div className="flex items-center justify-between gap-3">
-                    <Kicker>Screens</Kicker>
-                    <span className="text-[12px] text-sc-faint tabular-nums">{active.screens.length}</span>
-                  </div>
-                  <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
-                    {active.screens.map((item) => (
-                      <button
-                        key={item.screenId}
-                        type="button"
-                        onClick={() => selectScreen(item)}
-                        className="flex h-12 w-full items-center justify-between rounded-sc-control border border-sc-border bg-sc-card px-4 text-left transition hover:border-sc-border-strong hover:bg-sc-elevated"
-                      >
-                        <span className="truncate text-[14px] font-medium text-sc-text">{item.name}</span>
-                        <span className="shrink-0 text-[12px] text-sc-faint">Open ›</span>
-                      </button>
-                    ))}
-                    {!active.screens.length ? <CenterNote title="No screens yet" body="Create a screen in the left rail to control lighting." /> : null}
-                  </div>
-                </Panel>
-              </>
+              <div className="p-4"><Panel><CenterNote title="Nothing to preview" body="Select a screen to control and preview a light." /></Panel></div>
             )}
           </div>
-        </section>
-      </div>
+        </div>
+      )}
       {showClientConfirm ? <ClientConfirmModal onCancel={() => setShowClientConfirm(false)} /> : null}
       {backendModalMessage ? <BackendUnavailableModal message={backendModalMessage} /> : null}
     </main>
@@ -424,13 +485,36 @@ function ContextBar({ sessionName, screenName, hasSession }: { sessionName?: str
   );
 }
 
-function RailSection({ title, form, children }: { title: string; form: ReactNode; children: ReactNode }) {
+// `scroll` (default true) is the desktop rail behavior: the section fills the rail and its
+// list scrolls internally. In the compact Library tab the whole pane scrolls as one, so the
+// sections flow naturally (scroll=false) and don't fight the outer scroll region.
+function RailSection({ title, form, children, scroll = true }: { title: string; form: ReactNode; children: ReactNode; scroll?: boolean }) {
   return (
-    <section className="flex min-h-0 flex-1 flex-col p-3">
+    <section className={`flex flex-col p-3 ${scroll ? "min-h-0 flex-1" : ""}`}>
       <Kicker>{title}</Kicker>
       <div className="mt-2 shrink-0">{form}</div>
-      <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">{children}</div>
+      <div className={`mt-2 space-y-1 ${scroll ? "min-h-0 flex-1 overflow-y-auto" : ""}`}>{children}</div>
     </section>
+  );
+}
+
+function TabBar({ value, onChange, tabs }: { value: TabKey; onChange: (value: TabKey) => void; tabs: { value: TabKey; label: string; disabled?: boolean }[] }) {
+  return (
+    <div role="tablist" aria-label="Admin sections" className="flex shrink-0 gap-0.5 border-b border-sc-border bg-sc-rail p-2">
+      {tabs.map((tab) => (
+        <button
+          key={tab.value}
+          type="button"
+          role="tab"
+          aria-selected={value === tab.value}
+          disabled={tab.disabled}
+          onClick={() => onChange(tab.value)}
+          className={`h-9 flex-1 rounded-sc-control text-[13px] font-semibold transition disabled:cursor-not-allowed disabled:text-sc-faint disabled:opacity-40 ${value === tab.value ? "bg-sc-elevated text-sc-text" : "text-sc-muted enabled:hover:text-sc-text"}`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
