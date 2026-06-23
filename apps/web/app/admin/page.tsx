@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { defaultLightingState, hsvToCssColor, kelvinToCssColor, lightingCssColor, maxTemperature, minTemperature, type LightingMode, type LightingState, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
 import { createCode, createScreen, createSession, deleteScreen, deleteSession, getAdminWorkspace, isBackendUnavailableMessage, updateState } from "@/lib/backend";
 import { useAuth } from "@clerk/nextjs";
@@ -39,6 +39,15 @@ export default function AdminPage() {
   const [colorRecents, setColorRecents] = useState<ColorRecent[]>([]);
   const isDesktop = useMediaQuery("(min-width: 1280px)");
   const [activeTab, setActiveTab] = useState<TabKey>("library");
+  // Coalescing write pipeline: the local `state` is the instant source of truth while
+  // dragging; outgoing PUTs are coalesced (one in flight, latest value always wins) and
+  // server echoes are suppressed until our writes settle, so a laggy remote echo can never
+  // yank a controlled slider/wheel mid-drag. See pushState / flushWrites / the echo effect.
+  const pendingRef = useRef<LightingState | null>(null);
+  const inFlightRef = useRef(false);
+  const suppressEchoRef = useRef(false);
+  const latestServerStateRef = useRef<LightingState>(defaultLightingState);
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setCctRecents(getCctRecents());
@@ -90,8 +99,22 @@ export default function AdminPage() {
   }, [active, activeScreenId, isDesktop]);
 
   useEffect(() => {
+    latestServerStateRef.current = screenSync.state;
+    // While our own writes are in flight, local state owns the dials; applying a lagging
+    // echo here is exactly what made them stutter. We reconcile once the queue settles.
+    if (suppressEchoRef.current) return;
     setState(screenSync.state);
   }, [screenSync.state]);
+
+  // Reset the write pipeline whenever the selected screen changes so the controls hydrate
+  // from the newly-selected screen's real state (and a trailing write can't leak across).
+  useEffect(() => {
+    pendingRef.current = null;
+    suppressEchoRef.current = false;
+    if (releaseTimerRef.current) { clearTimeout(releaseTimerRef.current); releaseTimerRef.current = null; }
+  }, [activeSessionId, activeScreenId]);
+
+  useEffect(() => () => { if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current); }, []);
 
   function selectSession(session: SessionSummary) {
     setActiveSessionId(session.sessionId);
@@ -204,14 +227,51 @@ export default function AdminPage() {
     if (activeScreenId === item.screenId) setActiveScreenId("");
   }
 
-  async function pushState(nextState: LightingState) {
+  // Local-instant + enqueue. The dial updates immediately from local state (smooth); the
+  // PUT is coalesced through flushWrites so we never flood a high-latency link.
+  function pushState(nextState: LightingState) {
     if (!active || !screen) return;
     setState(nextState);
-    try {
-      await updateState(active.sessionId, screen.screenId, nextState, await getToken());
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not update light state");
-    }
+    suppressEchoRef.current = true;
+    if (releaseTimerRef.current) { clearTimeout(releaseTimerRef.current); releaseTimerRef.current = null; }
+    pendingRef.current = nextState;
+    flushWrites();
+  }
+
+  // One PUT in flight at a time; when it resolves, send the latest pending value (trailing).
+  // This self-throttles to the round-trip cadence and always delivers the final value.
+  function flushWrites() {
+    if (inFlightRef.current) return;
+    const next = pendingRef.current;
+    if (!next) { scheduleEchoRelease(); return; }
+    if (!active || !screen) { pendingRef.current = null; return; }
+    pendingRef.current = null;
+    inFlightRef.current = true;
+    const sessionId = active.sessionId;
+    const screenId = screen.screenId;
+    void (async () => {
+      try {
+        await updateState(sessionId, screenId, next, await getToken());
+      } catch (error) {
+        setError(error instanceof Error ? error.message : "Could not update light state");
+      } finally {
+        inFlightRef.current = false;
+        flushWrites();
+      }
+    })();
+  }
+
+  // Once the queue drains, wait a short grace (bridges the gaps between pointermoves and the
+  // post-release settle) and then re-enable echo-apply, reconciling to the latest server
+  // value — which by now equals our final committed value, so it's visually a no-op.
+  function scheduleEchoRelease() {
+    if (releaseTimerRef.current) return;
+    releaseTimerRef.current = setTimeout(() => {
+      releaseTimerRef.current = null;
+      if (inFlightRef.current || pendingRef.current) return;
+      suppressEchoRef.current = false;
+      setState(latestServerStateRef.current);
+    }, 250);
   }
 
   function setMode(mode: LightingMode) {
