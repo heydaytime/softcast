@@ -178,15 +178,52 @@ The WebSocket protocol is receive-only from the client's perspective:
 
 ## Environment and Clerk
 
-- This project is linked to Clerk application `app_3FNlKv0uOdVJI7jDOPydle7VRA6`.
-- Next.js reads Clerk values from `apps/web/.env.local`.
-- The backend development script explicitly loads the root `.env.local` with `--env-file=../../.env.local`.
-- Production injects backend secrets through its hosting environment; do not hardcode them.
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is public.
-- `CLERK_SECRET_KEY` is backend-only and must never appear in client code or logs.
+- This project is linked to Clerk application `app_3FNlKv0uOdVJI7jDOPydle7VRA6`. It has **both** instances live:
+  - **Development** (`ins_3FNlL1AiuSev7wQODfelj6TIaKa`): `pk_test`/`sk_test`, Frontend API on `…clerk.accounts.dev`. Used for local dev; keys live in `apps/web/.env.local` (root `.env.local` for the backend dev script).
+  - **Production** (`ins_3FV6awoYEmN19KOllclkst1owfW`): `pk_live`/`sk_live`, custom domain `softcast.studio`, Frontend API `clerk.softcast.studio`, account portal `accounts.softcast.studio`. This is what `softcast.studio` (Vercel) and the Pi backend use in production.
+- Enabled sign-in methods: **Email** (built-in) and **Google**. Apple is disabled. Google in production uses a self-managed GCP OAuth client (consent screen "External"+published, scopes `openid`/`email`/`profile`, redirect `https://clerk.softcast.studio/v1/oauth_callback`) — Clerk's shared dev Google creds do not carry to production.
+- Next.js reads Clerk values from `apps/web/.env.local` (dev); the backend dev script loads the root `.env.local` with `--env-file=../../.env.local`.
+- Production secrets live in the hosting environment, never in git: Vercel env store (frontend) and `/etc/softcast/backend.env` on the Pi (backend). See **Production Infrastructure**.
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is public. `CLERK_SECRET_KEY` is backend-only and must never appear in client code or logs.
 - The backend needs both `CLERK_SECRET_KEY` and the Clerk publishable key: `authenticateRequest()` in `@clerk/backend` requires the publishable key to resolve the instance, or it throws "Publishable key is missing". The backend reads `CLERK_PUBLISHABLE_KEY` (falling back to `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`); the publishable key is public and safe in backend env.
 - Other expected variables are documented in `.env.example`: backend URL, WebSocket URL, web URL, CORS origins, Redis URL, and port.
-- For Clerk CLI work, run `clerk doctor --json` first and prefer the repository's Clerk skill instructions.
+- For Clerk CLI work, run `clerk doctor --json` first and prefer the repository's Clerk skill instructions. `clerk deploy` (production setup) is interactive and must be run by the user in a real terminal; `clerk deploy status` and `clerk env pull --instance prod` are non-interactive and safe for an agent to run.
+
+## Production Infrastructure
+
+Production is **live**. Step-by-step runbook is in `deploy/DEPLOY.md`; this is the operational map.
+
+```
+Browser
+  softcast.studio        → Vercel (frontend; auto-deploys on push to main)
+  api.softcast.studio    → Cloudflare (proxied) → hdtrs (GCP edge Caddy) → [WireGuard] → Pi → Bun backend :4000 → Redis
+  clerk.softcast.studio  → Clerk production Frontend API (DNS-only CNAMEs in Cloudflare)
+```
+
+Hosts (ssh aliases). Secrets are NOT stored in this file — ask the user for the Pi sudo password, Vercel token, or Cloudflare token when an operation needs one.
+
+- `ssh pi` — Raspberry Pi (Ubuntu arm64), user `heyday`, reachable over WireGuard at `192.168.100.150`. Runs the backend. Has a sudo password (ask the user). `bun` is at `/home/heyday/.bun/bin/bun`.
+- `ssh hdtrs` — GCP VM (Ubuntu x86_64), user `heyday`, public IP `34.29.172.203`, WireGuard client `10.44.0.4`, **passwordless sudo**. Public edge fronting `api.softcast.studio`. Its Caddy ALSO serves unrelated sites (`api.blendr.live`, `ai.heydaytime.net`).
+- `ssh vpn2home` — GCP VM running the WireGuard **server** (`wg0` 10.44.0.1/24). `pi` and `hdtrs` are both clients. Normally untouched.
+
+Pi backend:
+- App dir `/home/heyday/softcast`, deployed by **rsync, not git** (`apps/` excluded). systemd unit `softcast-backend` (enabled on boot) runs `bun services/backend/src/index.ts`, binds `127.0.0.1:4000`. Env in `/etc/softcast/backend.env` (root:root `0600`, never in git; holds `pk_live`/`sk_live`, `PUBLIC_WEB_URL`, `CORS_ALLOWED_ORIGINS=https://softcast.studio`, `REDIS_URL`).
+- Local Caddy `:80` (`deploy/Caddyfile`) → backend. `redis-server` with AOF persistence + `noeviction`, enabled on boot.
+- Deploy backend changes: run `./deploy/deploy-to-pi.sh` from a local checkout (rsync + `bun install` + `systemctl restart softcast-backend`). There is no CI/CD for the backend.
+
+hdtrs edge:
+- One shared `/etc/caddy/Caddyfile` (also hosts other sites) — **APPEND, never overwrite**. The softcast block (`deploy/hdtrs-softcast.caddy`) is `api.softcast.studio { reverse_proxy 192.168.100.150:80 }`. Caddy auto-issues the Let's Encrypt cert; Cloudflare reaches the origin over HTTPS (Full mode). `reverse_proxy` forwards WebSocket upgrades through both Caddy hops, so `wss://api.softcast.studio/ws` works.
+
+Cloudflare DNS (zone `softcast.studio`):
+- `api` A → hdtrs public IP, **proxied (orange)**.
+- `softcast.studio` → Vercel.
+- Clerk records `clerk`, `accounts`, `clkmail`, `clk._domainkey`, `clk2._domainkey` → `*.clerk.services`, all **DNS only (grey)** — never proxy these or Clerk verification/TLS breaks.
+- DNS edits need a Cloudflare API token (ask the user) or the user does them in the dashboard.
+
+Vercel:
+- Project `heydaytime/softcast`, auto-deploys on push to `main`; build config in `vercel.json`.
+- Production env (in Vercel, never committed): `NEXT_PUBLIC_BACKEND_URL=https://api.softcast.studio`, `NEXT_PUBLIC_WS_URL=wss://api.softcast.studio/ws`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (pk_live), `CLERK_SECRET_KEY` (sk_live). `NEXT_PUBLIC_*` are inlined at build, so an env change requires a redeploy (push to `main`).
+- Setting Vercel env / deploying needs CLI auth: prefer `vercel login` (browser); the globally-installed CLI is old and mishandles `VERCEL_TOKEN` for some commands.
 
 ## UI Direction
 
