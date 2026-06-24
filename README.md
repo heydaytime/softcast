@@ -75,7 +75,7 @@ Every admin endpoint verifies the Clerk session token. Session mutations additio
 ## Web Routes
 
 - `/`: client-first verification code screen.
-- `/admin`: Clerk-protected admin console for sessions, screens, codes, color temperature, and brightness.
+- `/admin`: Clerk-protected admin console for sessions, screens, codes, color temperature, and brightness. Responsive: a three-pane layout on wide screens that collapses to a tabbed single-pane layout (Library / Control / Preview) on phones and narrow/zoomed windows.
 - `/session/:sessionId`: root session screen selector. This is not a light source and has no lighting state.
 - `/screen/:sessionId/:screenId`: fullscreen lighting surface.
 
@@ -88,7 +88,7 @@ Softcast supports a single fill-light state with a White/Color mode:
 - `hue`: `0` to `360`, and `saturation`: `0` to `1` (used in `color` mode).
 - `brightness`: normalized value from `0` to `1`, displayed in the UI as `0` to `100`. Applies in both modes.
 
-The admin controller offers a vertical CCT fader with standard quick-picks (white mode), a hue/saturation color wheel (color mode), a shared brightness fader, and recently-used swatches (a client-side convenience).
+The admin controller offers a vertical CCT fader with standard quick-picks (white mode), a hue/saturation color wheel (color mode), a shared brightness fader, and recently-used swatches (a client-side convenience). Dragging a control updates the admin UI instantly from local state and pushes coalesced live updates to the screen (one write in flight at a time, latest value wins), so the dials stay smooth even on a high-latency backend connection.
 
 The shared `@softcast/protocol` package owns the lighting state schema, default state, clamping, Kelvin and HSV color conversion, and fullscreen renderer HTML. The frontend sends this state from the admin controller, and the backend validates it before storing it in Redis and broadcasting it to screen clients.
 
