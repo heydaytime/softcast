@@ -140,7 +140,7 @@ The admin UI is a Redis-backed view, not the source of truth.
 2. The page calls `GET /api/admin/sessions` with a fresh Clerk token.
 3. Redis returns only sessions indexed to that user and still verifies each hash's `ownerId`.
 4. Session and screen mutations return shared DTOs that update the local UI cache.
-5. Screen state changes use authenticated `PUT` requests.
+5. Screen state changes use authenticated `PUT` requests, coalesced so only one write is in flight at a time (the latest value always wins; the final value is sent on release). Never fire one request per pointer move.
 6. The backend stores the state, increments its revision, and broadcasts the accepted state.
 7. `useSoftcast` receives broadcasts and rejects stale sequence/revision numbers.
 
@@ -152,6 +152,7 @@ Important frontend rules:
 - Do not send Clerk tokens over WebSockets.
 - Keep anonymous session/screen pages usable without Clerk.
 - Distinguish API `401`/`403`/validation errors from backend connectivity errors.
+- While the admin is actively editing a light, local optimistic state is the source of truth. The lighting `Slider`/`ColorWheel` are fully controlled, so do not let lagging WebSocket echoes overwrite them mid-edit (that is what stutters on remote links). Suppress echo-apply while writes are pending and reconcile to the server state once the write queue settles; reset that pipeline on screen switch.
 
 ## Shared Protocol
 
@@ -231,6 +232,7 @@ Vercel:
 - Use shared tokens from `apps/web/app/globals.css` and shared controls from `apps/web/lib/ui.tsx`.
 - The client pairing page stays focused on one action: enter a verification code.
 - The admin console uses stable navigation and workspace regions; creating sessions or screens must not cause major layout shifts. Regions hold a constant size across states (e.g. the verification panel reserves the code box and its action so generating a code never resizes the panel).
+- The admin console is responsive. At ≥1280px it shows the three-pane layout (rail · controls · preview). Below 1280px it collapses to one pane navigated by a top Library/Control/Preview tab strip, with the active pane as the sole scroll region so nothing clips on narrow widths or when zoomed. Keep the ≥1280px layout unchanged when editing compact styles: gate compact-only rules with `max-xl:`, and a single SSR-safe `useMediaQuery` (`apps/web/lib/useMediaQuery.ts`) drives the branch.
 - Every page shares the single fixed-height `SoftcastHeader` (`apps/web/lib/ui.tsx`); the brand sits left and the page action sits right. There is no per-page context/status chip in the header. The signed-in Clerk avatar is a fixed-size square (`UserButton` appearance override) and is always the right-most element.
 - The Admin entry action is a red-tinted "Admin" link (subtle red border/background and red text with a shield glyph) — noticeable via the red accent but not a loud solid-red fill.
 - Lighting controls expose a White/Color mode toggle: White mode is a CCT fader with quick-picks, Color mode is a hue/saturation color wheel, and a shared brightness fader applies to both. Recently-used swatches are a client-side convenience only.
