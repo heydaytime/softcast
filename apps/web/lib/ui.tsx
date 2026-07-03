@@ -1,4 +1,4 @@
-import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
+import { Show, SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 
@@ -97,6 +97,18 @@ export function FieldInput(props: InputHTMLAttributes<HTMLInputElement>) {
 
 export function Kicker({ children }: { children: ReactNode }) {
   return <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sc-faint">{children}</p>;
+}
+
+export function HeaderAuthActions({ showAdmin = false }: { showAdmin?: boolean }) {
+  const { isLoaded } = useAuth();
+  if (!isLoaded) return null;
+
+  return (
+    <div className="flex items-center gap-2">
+      {showAdmin ? <AdminLink href="/admin">Admin</AdminLink> : null}
+      <AuthControls />
+    </div>
+  );
 }
 
 export function AuthControls() {
