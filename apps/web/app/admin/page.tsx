@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { defaultLightingState, hsvToCssColor, kelvinToCssColor, lightingCssColor, maxTemperature, minTemperature, type LightingMode, type LightingState, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
+import { defaultLightingState, hsvToCssColor, initialDisplayState, kelvinToCssColor, lightingCssColor, maxTemperature, minTemperature, type LightingMode, type LightingState, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
 import { createCode, createScreen, createSession, deleteScreen, deleteSession, getAdminWorkspace, isBackendUnavailableMessage, updateState } from "@/lib/backend";
 import { useAuth } from "@clerk/nextjs";
 import { useSoftcast } from "@/lib/use-softcast";
@@ -30,7 +30,7 @@ export default function AdminPage() {
   const [screenName, setScreenName] = useState("key light");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
-  const [state, setState] = useState<LightingState>(defaultLightingState);
+  const [state, setState] = useState<LightingState>(initialDisplayState);
   const [sessionMenuId, setSessionMenuId] = useState("");
   const [screenMenuId, setScreenMenuId] = useState("");
   const [showClientConfirm, setShowClientConfirm] = useState(false);
@@ -112,6 +112,7 @@ export default function AdminPage() {
     pendingRef.current = null;
     suppressEchoRef.current = false;
     if (releaseTimerRef.current) { clearTimeout(releaseTimerRef.current); releaseTimerRef.current = null; }
+    if (activeScreenId) setState(initialDisplayState);
   }, [activeSessionId, activeScreenId]);
 
   useEffect(() => () => { if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current); }, []);

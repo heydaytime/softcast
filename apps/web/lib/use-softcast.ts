@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { defaultLightingState, type LightingState, type ScreenSummary, type ServerMessage, type SessionTarget } from "@softcast/protocol";
+import { initialDisplayState, type LightingState, type ScreenSummary, type ServerMessage, type SessionTarget } from "@softcast/protocol";
 import { websocketUnavailableMessage, wsConfigError, wsUrl } from "@/lib/backend";
 
 const baseReconnectDelay = 1000;
@@ -11,7 +11,7 @@ const maxReconnectDelay = 15000;
 const attemptsBeforeUnavailable = 5;
 
 export function useSoftcast(target: SessionTarget | null) {
-  const [state, setState] = useState<LightingState>(defaultLightingState);
+  const [state, setState] = useState<LightingState>(initialDisplayState);
   const [screens, setScreens] = useState<ScreenSummary[]>([]);
   const [status, setStatus] = useState("connecting");
 
@@ -25,6 +25,8 @@ export function useSoftcast(target: SessionTarget | null) {
       setStatus(wsConfigError);
       return;
     }
+
+    setState(initialDisplayState);
 
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;

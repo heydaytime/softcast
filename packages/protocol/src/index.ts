@@ -67,6 +67,15 @@ export const defaultLightingState: LightingState = {
   brightness: 1
 };
 
+/** Pre-connection UI placeholder: white CCT at 0% brightness (renders black). */
+export const initialDisplayState: LightingState = {
+  mode: "cct",
+  temperature: 6500,
+  hue: 0,
+  saturation: 0,
+  brightness: 0
+};
+
 export function clampLightingState(input: Partial<LightingState> | LightingState | null | undefined): LightingState {
   return LightingStateSchema.parse({
     mode: input?.mode === "color" ? "color" : "cct",

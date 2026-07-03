@@ -1,4 +1,4 @@
-import { clampLightingState, defaultLightingState, hsvToCssColor, hsvToRgb, kelvinToCssColor, lightingCssColor, rendererHtml } from "./index";
+import { clampLightingState, defaultLightingState, hsvToCssColor, hsvToRgb, initialDisplayState, kelvinToCssColor, lightingCssColor, rendererHtml } from "./index";
 
 const clamped = clampLightingState({ temperature: 12000, brightness: -1 });
 if (clamped.temperature !== 10000) throw new Error("Temperature did not clamp to maximum");
@@ -21,6 +21,7 @@ if (red.r !== 255 || red.g !== 0 || red.b !== 0) throw new Error("HSV red conver
 if (!kelvinToCssColor(2500).startsWith("rgb(")) throw new Error("Kelvin color conversion failed");
 if (!hsvToCssColor(120, 1).startsWith("rgb(")) throw new Error("HSV color conversion failed");
 if (lightingCssColor({ mode: "color", temperature: 2500, hue: 0, saturation: 1, brightness: 1 }) !== "rgb(255, 0, 0)") throw new Error("lightingCssColor color path failed");
+if (!rendererHtml(initialDisplayState).includes('"brightness":0')) throw new Error("Initial display state did not embed zero brightness");
 if (!rendererHtml(defaultLightingState).includes("softcast-light")) throw new Error("Renderer HTML was not generated");
 if (!rendererHtml(defaultLightingState).includes("function hsv")) throw new Error("Renderer HTML missing color support");
 
