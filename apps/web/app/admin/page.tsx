@@ -11,7 +11,7 @@ import { ColorWheel } from "@/lib/ColorWheel";
 import { getCctRecents, getColorRecents, pushCctRecent, pushColorRecent, type ColorRecent } from "@/lib/recents";
 import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { AuthControls, FieldInput, Kicker, PrimaryButton, SecondaryButton, SoftcastHeader } from "@/lib/ui";
+import { FieldInput, HeaderAuthActions, Kicker, PrimaryButton, SecondaryButton, SoftcastHeader } from "@/lib/ui";
 
 // Ordered cool→warm (high→low Kelvin) so the chips read top-to-bottom in the same
 // direction as the vertical CCT gradient bar (blue/cool at top, orange/warm at bottom).
@@ -456,7 +456,7 @@ export default function AdminPage() {
 
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden bg-sc-bg text-sc-text">
-      <SoftcastHeader action={<AuthControls />} onBrandClick={() => setShowClientConfirm(true)} />
+      <SoftcastHeader action={<HeaderAuthActions />} onBrandClick={() => setShowClientConfirm(true)} />
       {isDesktop ? (
         <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] border-t border-black">
           <aside className="flex min-h-0 flex-col border-r border-sc-border bg-sc-rail">

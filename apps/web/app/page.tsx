@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { isBackendUnavailableMessage, redeemCode } from "@/lib/backend";
 import { BackendUnavailableModal } from "@/lib/BackendUnavailableModal";
-import { AdminLink, AuthControls, FieldInput, PrimaryButton, SoftcastHeader } from "@/lib/ui";
+import { FieldInput, HeaderAuthActions, PrimaryButton, SoftcastHeader } from "@/lib/ui";
 
 export default function Home() {
   const [code, setCode] = useState("");
@@ -24,7 +24,7 @@ export default function Home() {
 
   return (
     <main className="flex min-h-dvh flex-col bg-sc-bg text-sc-text">
-      <SoftcastHeader action={<div className="flex items-center gap-2"><AdminLink href="/admin">Admin</AdminLink><AuthControls /></div>} />
+      <SoftcastHeader action={<HeaderAuthActions showAdmin />} />
       <section className="flex min-h-0 flex-1 items-start justify-center px-5 py-14 sm:items-center sm:py-10">
         <div className="w-full max-w-[560px] rounded-sc-dialog border border-sc-border bg-sc-panel p-6 shadow-2xl sm:p-8">
           <p className="text-[13px] font-medium text-sc-muted">Display pairing</p>
