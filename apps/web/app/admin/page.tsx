@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { defaultLightingState, hsvToCssColor, initialDisplayState, kelvinToCssColor, lightingCssColor, maxTemperature, minTemperature, type LightingMode, type LightingState, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
+import { hsvToCssColor, initialDisplayState, kelvinToCssColor, lightingCssColor, maxTemperature, minTemperature, type LightingMode, type LightingState, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
 import { createCode, createScreen, createSession, deleteScreen, deleteSession, getAdminWorkspace, isBackendUnavailableMessage, updateState } from "@/lib/backend";
 import { useAuth } from "@clerk/nextjs";
 import { useSoftcast } from "@/lib/use-softcast";
-import { ScreenRenderer } from "@/lib/ScreenRenderer";
 import { Slider } from "@/lib/Slider";
 import { ColorWheel } from "@/lib/ColorWheel";
 import { getCctRecents, getColorRecents, pushCctRecent, pushColorRecent, type ColorRecent } from "@/lib/recents";
@@ -22,7 +21,7 @@ const cctPresets = [6500, 5600, 4300, 3200, 2700];
 type TabKey = "library" | "control" | "preview";
 
 export default function AdminPage() {
-  const { getToken, isLoaded } = useAuth();
+  const { isLoaded } = useAuth();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
   const [activeScreenId, setActiveScreenId] = useState("");
@@ -39,15 +38,12 @@ export default function AdminPage() {
   const [colorRecents, setColorRecents] = useState<ColorRecent[]>([]);
   const isDesktop = useMediaQuery("(min-width: 1280px)");
   const [activeTab, setActiveTab] = useState<TabKey>("library");
-  // Coalescing write pipeline: the local `state` is the instant source of truth while
-  // dragging; outgoing PUTs are coalesced (one in flight, latest value always wins) and
-  // server echoes are suppressed until our writes settle, so a laggy remote echo can never
-  // yank a controlled slider/wheel mid-drag. See pushState / flushWrites / the echo effect.
+  // Local `state` owns the dials and preview after the first hydrate for a screen.
+  // Polls only load the selected screen once; they never overwrite an in-progress edit.
+  // PUTs stay coalesced (one in flight, latest value wins).
   const pendingRef = useRef<LightingState | null>(null);
   const inFlightRef = useRef(false);
-  const suppressEchoRef = useRef(false);
-  const latestServerStateRef = useRef<LightingState>(defaultLightingState);
-  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hydratedScreenRef = useRef("");
 
   useEffect(() => {
     setCctRecents(getCctRecents());
@@ -61,7 +57,7 @@ export default function AdminPage() {
     async function loadWorkspace() {
       setError("");
       try {
-        const workspace = await getAdminWorkspace(await getToken());
+        const workspace = await getAdminWorkspace();
         if (!cancelled) setSessions(workspace.sessions);
       } catch (error) {
         if (!cancelled) setError(error instanceof Error ? error.message : "Could not load sessions");
@@ -72,7 +68,7 @@ export default function AdminPage() {
 
     void loadWorkspace();
     return () => { cancelled = true; };
-  }, [getToken, isLoaded]);
+  }, [isLoaded]);
 
   useEffect(() => {
     if (!activeSessionId && sessions[0]) setActiveSessionId(sessions[0].sessionId);
@@ -99,23 +95,18 @@ export default function AdminPage() {
   }, [active, activeScreenId, isDesktop]);
 
   useEffect(() => {
-    latestServerStateRef.current = screenSync.state;
-    // While our own writes are in flight, local state owns the dials; applying a lagging
-    // echo here is exactly what made them stutter. We reconcile once the queue settles.
-    if (suppressEchoRef.current) return;
-    setState(screenSync.state);
-  }, [screenSync.state]);
-
-  // Reset the write pipeline whenever the selected screen changes so the controls hydrate
-  // from the newly-selected screen's real state (and a trailing write can't leak across).
-  useEffect(() => {
     pendingRef.current = null;
-    suppressEchoRef.current = false;
-    if (releaseTimerRef.current) { clearTimeout(releaseTimerRef.current); releaseTimerRef.current = null; }
+    hydratedScreenRef.current = "";
     if (activeScreenId) setState(initialDisplayState);
   }, [activeSessionId, activeScreenId]);
 
-  useEffect(() => () => { if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current); }, []);
+  useEffect(() => {
+    if (!activeScreenId || screenSync.status !== "connected") return;
+    const key = `${activeSessionId}:${activeScreenId}`;
+    if (hydratedScreenRef.current === key) return;
+    hydratedScreenRef.current = key;
+    setState(screenSync.state);
+  }, [activeSessionId, activeScreenId, screenSync.status, screenSync.state]);
 
   function selectSession(session: SessionSummary) {
     setActiveSessionId(session.sessionId);
@@ -141,7 +132,7 @@ export default function AdminPage() {
     if (!sessionName.trim()) return;
     setError("");
     try {
-      const { session } = await createSession(sessionName, await getToken());
+      const { session } = await createSession(sessionName);
       setSessions(upsertSession(sessions, session));
       setActiveSessionId(session.sessionId);
       setActiveScreenId("");
@@ -159,7 +150,7 @@ export default function AdminPage() {
   async function removeSession(session: SessionSummary) {
     setError("");
     try {
-      await deleteSession(session.sessionId, await getToken());
+      await deleteSession(session.sessionId);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not delete session");
       return;
@@ -180,7 +171,7 @@ export default function AdminPage() {
     if (!active || !screenName.trim()) return;
     setError("");
     try {
-      const { screen: created } = await createScreen(active.sessionId, screenName, await getToken());
+      const { screen: created } = await createScreen(active.sessionId, screenName);
       setSessions(sessions.map((session) => session.sessionId === active.sessionId ? { ...session, screens: upsertScreen(session.screens, created) } : session));
       setActiveScreenId(created.screenId);
       setCode("");
@@ -195,7 +186,7 @@ export default function AdminPage() {
     setCode("");
     setError("");
     try {
-      const generated = await createCode({ sessionId: active.sessionId, screenId: screen?.screenId }, await getToken());
+      const generated = await createCode({ sessionId: active.sessionId, screenId: screen?.screenId });
       setCode(generated.code);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not generate code");
@@ -216,7 +207,7 @@ export default function AdminPage() {
     if (!active) return;
     setError("");
     try {
-      await deleteScreen(active.sessionId, item.screenId, await getToken());
+      await deleteScreen(active.sessionId, item.screenId);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not delete screen");
       return;
@@ -233,26 +224,22 @@ export default function AdminPage() {
   function pushState(nextState: LightingState) {
     if (!active || !screen) return;
     setState(nextState);
-    suppressEchoRef.current = true;
-    if (releaseTimerRef.current) { clearTimeout(releaseTimerRef.current); releaseTimerRef.current = null; }
     pendingRef.current = nextState;
     flushWrites();
   }
 
   // One PUT in flight at a time; when it resolves, send the latest pending value (trailing).
-  // This self-throttles to the round-trip cadence and always delivers the final value.
   function flushWrites() {
     if (inFlightRef.current) return;
     const next = pendingRef.current;
-    if (!next) { scheduleEchoRelease(); return; }
-    if (!active || !screen) { pendingRef.current = null; return; }
+    if (!next || !active || !screen) { pendingRef.current = null; return; }
     pendingRef.current = null;
     inFlightRef.current = true;
     const sessionId = active.sessionId;
     const screenId = screen.screenId;
     void (async () => {
       try {
-        await updateState(sessionId, screenId, next, await getToken());
+        await updateState(sessionId, screenId, next);
       } catch (error) {
         setError(error instanceof Error ? error.message : "Could not update light state");
       } finally {
@@ -260,19 +247,6 @@ export default function AdminPage() {
         flushWrites();
       }
     })();
-  }
-
-  // Once the queue drains, wait a short grace (bridges the gaps between pointermoves and the
-  // post-release settle) and then re-enable echo-apply, reconciling to the latest server
-  // value — which by now equals our final committed value, so it's visually a no-op.
-  function scheduleEchoRelease() {
-    if (releaseTimerRef.current) return;
-    releaseTimerRef.current = setTimeout(() => {
-      releaseTimerRef.current = null;
-      if (inFlightRef.current || pendingRef.current) return;
-      suppressEchoRef.current = false;
-      setState(latestServerStateRef.current);
-    }, 250);
   }
 
   function setMode(mode: LightingMode) {
@@ -478,7 +452,7 @@ export default function AdminPage() {
                     {lightingPanel}
                   </div>
                   <div className="min-h-0 overflow-hidden rounded-sc-panel border border-sc-border bg-black">
-                    <ScreenRenderer state={state} preview />
+                    <LightPreview state={state} />
                   </div>
                 </>
               ) : (
@@ -517,7 +491,7 @@ export default function AdminPage() {
             ) : screen ? (
               <div className="h-full p-4">
                 <div className="h-full min-h-[260px] overflow-hidden rounded-sc-panel border border-sc-border bg-black">
-                  <ScreenRenderer state={state} preview />
+                  <LightPreview state={state} />
                 </div>
               </div>
             ) : (
@@ -726,6 +700,14 @@ function SharePanel({ title, code, error, onGenerate, onCopyLink, onCopyCode }: 
       </div>
       {error && !isBackendUnavailableMessage(error) ? <p className="mt-3 text-[13px] text-sc-danger">{error}</p> : null}
     </Panel>
+  );
+}
+
+function LightPreview({ state }: { state: LightingState }) {
+  return (
+    <div className="h-full min-h-[260px] w-full bg-black" style={{ background: lightingCssColor(state) }}>
+      <div className="h-full w-full bg-black" style={{ opacity: 1 - state.brightness }} />
+    </div>
   );
 }
 
