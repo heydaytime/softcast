@@ -6,7 +6,7 @@ clerk.softcast.studio  → Clerk Frontend API (DNS-only CNAMEs)
 Redis                  → Upstash (Vercel Marketplace)
 ```
 
-Push to `main` deploys the app.
+Git pushes do not deploy. Publish with `vercel deploy --prod` from this repo.
 
 ## Vercel env
 
@@ -20,7 +20,7 @@ KV_REST_API_URL=…
 KV_REST_API_TOKEN=…
 ```
 
-`NEXT_PUBLIC_*` values are inlined at build time. After changing them, redeploy (push to `main`).
+`NEXT_PUBLIC_*` values are inlined at build time. After changing them, publish a new deployment with `vercel deploy --prod`.
 
 The browser calls same-origin `/api/*`.
 

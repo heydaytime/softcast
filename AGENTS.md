@@ -182,7 +182,7 @@ softcast.studio        → Vercel (UI + `/api/*` → Upstash Redis)
 clerk.softcast.studio  → Clerk Frontend API (DNS-only CNAMEs)
 ```
 
-- Vercel project `heydaytime/softcast`, auto-deploys on push to `main`; build config in `vercel.json`.
+- Vercel project `heydaytime/softcast`. Git pushes do not deploy. Publish with `vercel deploy --prod`. Build config is in `vercel.json`.
 - Production env (in Vercel, never committed): `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `PUBLIC_WEB_URL=https://softcast.studio`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`.
 - Setting Vercel env / deploying needs CLI auth: prefer `vercel login` (browser).
 
