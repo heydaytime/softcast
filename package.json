@@ -4,17 +4,14 @@
   "type": "module",
   "workspaces": [
     "apps/*",
-    "services/*",
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run --filter @softcast/backend --filter @softcast/web --parallel dev",
-    "dev:all": "bun run --filter @softcast/backend --filter @softcast/web --parallel dev",
+    "dev": "bun run --filter @softcast/web dev",
     "dev:web": "bun run --filter @softcast/web dev",
-    "dev:backend": "bun run --filter @softcast/backend dev",
     "build": "bun run --filter '*' build",
     "typecheck": "bun run --filter '*' typecheck",
-    "test:backend": "bun run --filter @softcast/backend test:smoke"
+    "test:api": "bun run --filter @softcast/web test:smoke"
   },
   "dependencies": {
     "next": "^16.0.3",

@@ -44,20 +44,10 @@ export type RedeemedCode = SessionTarget & {
   screenUrl?: string;
 };
 
-export type Sequenced = { seq: number };
-
 export type StoredLightingState = {
   revision: number;
   state: LightingState;
 };
-
-export type ClientMessage = { type: "subscribe"; target: SessionTarget };
-
-export type ServerMessage = Sequenced & (
-  | { type: "state"; target: SessionTarget; revision: number; state: LightingState }
-  | { type: "screens"; sessionId: string; screens: ScreenSummary[] }
-  | { type: "error"; message: string }
-);
 
 export const defaultLightingState: LightingState = {
   mode: "cct",

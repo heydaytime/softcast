@@ -1,6 +1,6 @@
 import { defaultLightingState, type AdminWorkspace, type ScreenSummary, type SessionSummary } from "@softcast/protocol";
 
-const base = process.env.BACKEND_URL || "http://localhost:4000";
+const base = process.env.BACKEND_URL || "http://localhost:3000";
 const authToken = process.env.BACKEND_AUTH_TOKEN;
 const otherAuthToken = process.env.BACKEND_OTHER_AUTH_TOKEN;
 
@@ -9,7 +9,7 @@ async function main() {
   if (unauthenticated.status !== 401) throw new Error(`Unauthenticated admin list should return 401, got ${unauthenticated.status}`);
 
   if (!authToken) {
-    console.log("Backend smoke test passed unauthenticated guard. Set BACKEND_AUTH_TOKEN to run the owner flow.");
+    console.log("API smoke test passed unauthenticated guard. Set BACKEND_AUTH_TOKEN to run the owner flow.");
     return;
   }
 
@@ -33,6 +33,9 @@ async function main() {
     throw new Error("Owner workspace did not persist the created screen");
   }
 
+  const polled = await request<{ screens: ScreenSummary[] }>(`/api/sessions/${session.sessionId}/screens`, { method: "GET" });
+  if (polled.screens[0]?.screenId !== screen.screenId) throw new Error("Public screen poll did not return the created screen");
+
   if (otherAuthToken) {
     const forbidden = await fetch(`${base}/api/admin/sessions/${session.sessionId}/screens/${screen.screenId}/state`, {
       method: "PUT",
@@ -49,6 +52,9 @@ async function main() {
     body: { state: update }
   });
   if (updated.state.temperature !== 4300 || updated.state.brightness !== 0.7) throw new Error("State did not persist");
+
+  const snapshot = await request<{ revision: number; state: typeof update }>(`/api/sessions/${session.sessionId}/screens/${screen.screenId}/state`, { method: "GET" });
+  if (snapshot.state.temperature !== 4300 || snapshot.revision < 1) throw new Error("Public state poll did not return the updated light");
 
   const colorUpdate = { ...defaultLightingState, mode: "color" as const, hue: 200, saturation: 0.8, brightness: 0.5 };
   const colorUpdated = await request<{ state: typeof colorUpdate }>(`/api/admin/sessions/${session.sessionId}/screens/${screen.screenId}/state`, {
@@ -72,7 +78,7 @@ async function main() {
   await request(`/api/admin/sessions/${session.sessionId}`, { method: "DELETE", token: authToken });
   const afterDelete = await request<AdminWorkspace>("/api/admin/sessions", { method: "GET", token: authToken });
   if (afterDelete.sessions.some((item) => item.sessionId === session.sessionId)) throw new Error("Deleted session remained in owner workspace");
-  console.log("Backend owner smoke test passed");
+  console.log("API owner smoke test passed");
 }
 
 async function request<T = { ok: true }>(path: string, options: { method: string; token?: string; body?: unknown }): Promise<T> {
