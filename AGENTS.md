@@ -12,7 +12,7 @@ This file is the operational source of truth for coding agents working in this r
 - Do not revert unrelated work. The repository may already have a dirty working tree.
 - Use `apply_patch` for manual file edits.
 - Use `rg` or `rg --files` for repository searches.
-- Always commit finished work before replying to the user. Do not end a turn with uncommitted project changes unless the user said not to commit, or the only remaining files are secrets / unrelated leftovers.
+- Always commit and push finished work before replying to the user. Do not end a turn with uncommitted or unpushed project changes unless the user said not to, or the only remaining files are secrets / unrelated leftovers.
 
 ## Product Invariants
 
