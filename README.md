@@ -4,7 +4,9 @@
 
 A TV, tablet, phone, laptop, or projector becomes a lighting surface. Softcast fills that display with a single white or color, and you drive it from a web console. There is nothing to install on the display — open a page, pair it, go fullscreen.
 
-The hosted product is at [softcast.studio](https://softcast.studio).
+The hosted product is at [softcast.studio](https://softcast.studio). There is a walkthrough on YouTube: [I Made My TV Work Like a DMX Light](https://www.youtube.com/watch?v=t31eALOBhKw).
+
+[![Watch I Made My TV Work Like a DMX Light](https://img.youtube.com/vi/t31eALOBhKw/maxresdefault.jpg)](https://www.youtube.com/watch?v=t31eALOBhKw)
 
 ## Pair a display
 
