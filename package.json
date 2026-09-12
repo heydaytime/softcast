@@ -1,6 +1,8 @@
 {
   "name": "softcast",
   "private": true,
+  "license": "MIT",
+  "description": "Turn any browser display into a remotely controlled fill light.",
   "type": "module",
   "workspaces": [
     "apps/*",

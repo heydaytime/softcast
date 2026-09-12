@@ -1,89 +1,170 @@
-# softcast
+# Softcast
 
-Browser-native lighting surfaces controlled from the web. A client device can be any browser-capable display: TV, iPad, phone, laptop, projector, etc. Admins create Redis-backed sessions, generate one-time verification codes, and push color temperature and brightness to individual screens.
+**Turn any screen with a browser into a remotely controlled fill light.**
 
-## Monorepo
+A TV, tablet, phone, laptop, or projector becomes a lighting surface. Softcast fills that display with a single white or color, and you drive it from a web console. There is nothing to install on the display — open a page, pair it, go fullscreen.
 
-- `apps/web`: Next.js 16 + Tailwind v4 app for `softcast.studio`. The HTTP API lives here as Route Handlers.
-- `packages/protocol`: shared TypeScript protocol and lighting state types.
+The hosted product is at [softcast.studio](https://softcast.studio).
 
-## Rules
+## Pair a display
 
-- Admin access is authenticated with Clerk.
-- Client screens are anonymous. Anyone with a root session link or screen link can listen.
-- Sessions are owned by the Clerk user that created them.
-- Admin mutation commands require the owning Clerk user.
-- One-time verification codes only redirect/link a client to a root session or a specific screen, and expire after 5 minutes.
-- Upstash Redis stores Clerk ownership, the owner's session index, sessions, screens, verification codes, and current lighting state.
-- Root session IDs are randomly generated and unique per created session.
-- Screen IDs are randomly generated and unique per created screen.
-- Session and screen display names are durable Redis metadata.
-- Sessions and screens persist until their owning Clerk user deletes them.
-- The admin workspace is reconstructed from Redis after refresh or sign-in on another device.
+On the device that should become the light, open Softcast and enter the six-digit code from the console. The code is single-use and expires after five minutes. You can also paste a session or screen link directly.
 
-## Local Setup
+![Display pairing page: a dark card titled Enter code, with a six-digit field and a Continue button.](docs/pairing.png)
 
-Copy `.env.example` into `apps/web/.env.local` and fill Clerk plus Upstash Redis values.
+## Control the light
+
+Sign in to the admin console to create a **session** (a room or shoot) and one or more **screens** (individual lights). Set the fill from there. White mode is a Kelvin fader with common cinema presets; color mode is a hue and saturation wheel. Brightness applies to both. The large pane is a live preview of what the display will show.
+
+![Admin console with a session list on the left, color wheel and brightness fader in the middle, and a full-width light preview on the right.](docs/admin.png)
+
+Changes reach paired displays about twice a second. Anyone with a valid session or screen link can view the light. Only the signed-in owner can change it.
+
+## How a shoot comes together
+
+1. Create a session and add a screen for each physical display.
+2. Generate a verification code, or copy the session or screen link.
+3. On each display, enter the code (or open the link). The page becomes the light.
+4. Drag Kelvin, the color wheel, or brightness. Displays update live.
+
+A session is a grouping, not a light. Each screen owns one lighting state. Display names are just labels — they can repeat. The IDs in the URL are random and are what actually address a session or screen.
+
+On a lighting surface, **F** toggles fullscreen, **Enter** or **Space** toggles the status overlay, and **Escape** leaves fullscreen. The overlay hides on its own after a few seconds so the screen reads as a clean fill.
+
+## Lighting
+
+Softcast stores one static fill per screen. There are no effects, animations, or server-side presets.
+
+| Field | Range | When it applies |
+| --- | --- | --- |
+| `mode` | `cct` or `color` | White versus hue/saturation |
+| `temperature` | 1800–10000 K | White mode |
+| `hue` | 0–360 | Color mode |
+| `saturation` | 0–1 | Color mode |
+| `brightness` | 0–1 (UI shows 0–100%) | Both modes |
+
+Recent swatches in the console are a local convenience. They never go to the server.
+
+Dragging a control updates the console immediately. Writes are coalesced: one request in flight, latest value wins, so a slow link does not flood or yank the dials backward.
+
+## Run it locally
+
+You need [Bun](https://bun.sh), a [Clerk](https://clerk.com) application (email or social sign-in is enough), and an [Upstash Redis](https://upstash.com) database.
 
 ```bash
+cp .env.example apps/web/.env.local
+# fill the values below
 bun install
 bun run dev
 ```
 
-Clerk is required for admin access. Upstash Redis is required for every API route.
+Then open [http://localhost:3000](http://localhost:3000) to pair a display, or [http://localhost:3000/admin](http://localhost:3000/admin) to sign in.
+
+Required environment variables in `apps/web/.env.local`:
+
+```bash
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=
+PUBLIC_WEB_URL=http://localhost:3000
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
+```
+
+`PUBLIC_WEB_URL` is the origin written into session and screen links. Redis also accepts the `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` names. You only need one of the two Redis pairs.
+
+Clerk protects `/admin` and the owner API. Pairing, session lists, and lighting polls stay public so a TV or tablet never has to sign in.
+
+## Project layout
+
+```
+apps/web              Next.js app: console, pairing, displays, and the HTTP API
+packages/protocol     Shared lighting types, validation, color math, renderer HTML
+```
+
+The stack is Next.js 16, React 19, Tailwind CSS v4, Clerk, and Upstash Redis over REST. Displays poll; there is no WebSocket.
+
+Routes:
+
+| Path | Who | What |
+| --- | --- | --- |
+| `/` | Anyone | Pair a display with a verification code |
+| `/admin` | Signed-in owner | Sessions, screens, codes, lighting controls |
+| `/session/:sessionId` | Anyone with the link | Pick a screen — not a light itself |
+| `/screen/:sessionId/:screenId` | Anyone with the link | Fullscreen lighting surface |
+| `/sign-in`, `/sign-up` | Anyone | Clerk authentication |
+
+On wide viewports the console is three panes: library, controls, preview. Below 1280px it becomes a Library / Control / Preview tab strip so nothing clips on a phone or a zoomed laptop.
 
 ## API
 
-Authenticated owner API (same origin, Clerk session cookie):
+Owner routes use the same-origin Clerk session cookie. The server reads the user from that session. It never trusts an `ownerId` from the client.
 
-- `GET /api/admin/sessions`
-- `POST /api/admin/sessions` with `{ name }`
-- `DELETE /api/admin/sessions/:sessionId`
-- `POST /api/admin/sessions/:sessionId/screens` with `{ name }`
-- `DELETE /api/admin/sessions/:sessionId/screens/:screenId`
-- `PUT /api/admin/sessions/:sessionId/screens/:screenId/state` with `{ state }`
-- `POST /api/admin/codes` with `{ sessionId, screenId? }`
+```
+GET    /api/admin/sessions
+POST   /api/admin/sessions                         { name }
+DELETE /api/admin/sessions/:sessionId
+POST   /api/admin/sessions/:sessionId/screens      { name }
+DELETE /api/admin/sessions/:sessionId/screens/:screenId
+PUT    /api/admin/sessions/:sessionId/screens/:screenId/state   { state }
+POST   /api/admin/codes                            { sessionId, screenId? }
+```
 
-Public client API:
+Public routes:
 
-- `POST /api/codes/redeem` with `{ code }`
-- `GET /api/sessions/:sessionId/screens`
-- `GET /api/sessions/:sessionId/screens/:screenId/state`
-- `GET /api/health`
+```
+POST   /api/codes/redeem                           { code }
+GET    /api/sessions/:sessionId/screens
+GET    /api/sessions/:sessionId/screens/:screenId/state
+GET    /api/health
+```
 
-Every admin endpoint reads the Clerk user from the session (`auth()`). Session mutations additionally compare that user ID to the `ownerId` stored in the session hash. Displays poll the public GET routes about twice a second and apply a payload when `revision` increases.
+`GET /api/health` pings Redis and returns `503` when it is down. Names are limited to 80 characters. Lighting payloads are clamped through `@softcast/protocol` before they are stored. Public responses never include Clerk IDs or ownership fields.
 
-## Redis Keys
+Treat session and screen URLs as capability links. Anyone who has one can read that screen's current color.
 
-- `softcast:user:{clerkUserId}:sessions`: sorted index of sessions owned by a Clerk user.
-- `softcast:session:{sessionId}`: session hash containing `ownerId`, `name`, and `createdAt`.
-- `softcast:session:{sessionId}:screens`: sorted index of screens in a session.
-- `softcast:session:{sessionId}:screen:{screenId}`: screen name and creation metadata.
-- `softcast:session:{sessionId}:screen:{screenId}:state`: mode, temperature, hue, saturation, brightness, revision, and update time.
-- `softcast:code:{code}`: one-time target with a five-minute TTL.
+## Redis
 
-## Web Routes
+Keys use the `softcast:` prefix. Sessions and screens persist until the owner deletes them. Codes live for five minutes and are consumed on redeem.
 
-- `/`: client-first verification code screen.
-- `/admin`: Clerk-protected admin console for sessions, screens, codes, color temperature, and brightness. Responsive: a three-pane layout on wide screens that collapses to a tabbed single-pane layout (Library / Control / Preview) on phones and narrow/zoomed windows.
-- `/session/:sessionId`: root session screen selector. This is not a light source and has no lighting state.
-- `/screen/:sessionId/:screenId`: fullscreen lighting surface.
+```
+softcast:user:{clerkUserId}:sessions
+  ZSET    session ids, scored by createdAt          (index only)
 
-## Lighting Controls
+softcast:session:{sessionId}
+  HASH    ownerId, name, createdAt                  (ownership lives here)
 
-Softcast supports a single fill-light state with a White/Color mode:
+softcast:session:{sessionId}:screens
+  ZSET    screen ids, scored by createdAt
 
-- `mode`: `cct` (white) or `color`.
-- `temperature`: Kelvin value from `1800` to `10000` (used in `cct` mode).
-- `hue`: `0` to `360`, and `saturation`: `0` to `1` (used in `color` mode).
-- `brightness`: normalized value from `0` to `1`, displayed in the UI as `0` to `100`. Applies in both modes.
+softcast:session:{sessionId}:screen:{screenId}
+  HASH    name, createdAt
 
-The admin controller offers a vertical CCT fader with standard quick-picks (white mode), a hue/saturation color wheel (color mode), a shared brightness fader, and recently-used swatches (a client-side convenience). Dragging a control updates the admin UI instantly from local state and pushes coalesced live updates (one write in flight at a time, latest value wins).
+softcast:session:{sessionId}:screen:{screenId}:state
+  HASH    mode, temperature, hue, saturation, brightness, revision, updatedAt
 
-The shared `@softcast/protocol` package owns the lighting state schema, default state, clamping, Kelvin and HSV color conversion, and fullscreen renderer HTML. The frontend sends this state from the admin controller, and the server validates it before storing it in Redis.
+softcast:code:{sixDigitCode}
+  STRING  JSON target, 300s TTL, single-use GETDEL
+```
 
-## Production
+Creates, deletes, and state writes run in Lua so the owner check and the write happen together.
 
-`softcast.studio` is a Vercel Next.js app (UI and `/api/*`). Redis is Upstash. See `deploy/DEPLOY.md`.
+## Deploy your own
 
-`GET /api/health` pings Redis and returns `503` when it is unreachable.
+The hosted site runs on Vercel with Upstash Redis and Clerk. `vercel.json` already has the install and build commands.
+
+Set the same variable names as local development, with `PUBLIC_WEB_URL` pointing at your public origin. `NEXT_PUBLIC_*` values are baked in at build time — change them, then publish a new deployment.
+
+A short production checklist lives in [deploy/DEPLOY.md](deploy/DEPLOY.md).
+
+## Development
+
+```bash
+bun run typecheck
+bun packages/protocol/src/smoke-test.ts
+```
+
+`bun run test:api` expects a Next server you already started. Without extra tokens it only checks that admin routes reject anonymous callers. Set `BACKEND_AUTH_TOKEN` (and optionally `BACKEND_OTHER_AUTH_TOKEN`) to exercise the owner flow and the cross-user `403`.
+
+## License
+
+[MIT](LICENSE)

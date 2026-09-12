@@ -7,8 +7,12 @@ build
 .env
 .env.local
 .env.*.local
-bun.lock
 *.log
 .DS_Store
-
 .vercel
+.cursor/
+*.zone
+client_secret*.json
+credentials.json
+*.pem
+*.key
